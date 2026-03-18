@@ -1,0 +1,70 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
+    platform: eurion
+
+scrape_configs:
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: eurion-gateway
+    static_configs:
+      - targets: ["eurion-gateway:3000"]
+    metrics_path: /metrics
+
+  - job_name: eurion-identity
+    static_configs:
+      - targets: ["eurion-identity-service:3001"]
+    metrics_path: /metrics
+
+  - job_name: eurion-org
+    static_configs:
+      - targets: ["eurion-org-service:3002"]
+    metrics_path: /metrics
+
+  - job_name: eurion-audit
+    static_configs:
+      - targets: ["eurion-audit-service:3003"]
+    metrics_path: /metrics
+
+  - job_name: eurion-messaging
+    static_configs:
+      - targets: ["eurion-messaging-service:3004"]
+    metrics_path: /metrics
+
+  - job_name: eurion-file
+    static_configs:
+      - targets: ["eurion-file-service:3005"]
+    metrics_path: /metrics
+
+  - job_name: eurion-video
+    static_configs:
+      - targets: ["eurion-video-service:3006"]
+    metrics_path: /metrics
+
+  - job_name: eurion-notification
+    static_configs:
+      - targets: ["eurion-notification-service:3007"]
+    metrics_path: /metrics
+
+  - job_name: eurion-admin
+    static_configs:
+      - targets: ["eurion-admin-service:3008"]
+    metrics_path: /metrics
+
+  - job_name: eurion-search
+    static_configs:
+      - targets: ["eurion-search-service:3009"]
+    metrics_path: /metrics

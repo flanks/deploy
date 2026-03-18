@@ -1,0 +1,55 @@
+http:
+  middlewares:
+    # Strip /api prefix before forwarding to gateway service
+    strip-api-prefix:
+      stripPrefix:
+        prefixes:
+          - "/api"
+
+    # Security headers for all responses
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+        customResponseHeaders:
+          X-Frame-Options: "SAMEORIGIN"
+          X-Content-Type-Options: "nosniff"
+
+    # Rate limiting
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1m
+
+    # Redirect mobile.eurion.se → app.eurion.se
+    mobile-redirect:
+      redirectRegex:
+        regex: "^https://mobile\\.eurion\\.se(.*)"
+        replacement: "https://app.eurion.se${1}"
+        permanent: true
+
+  routers:
+    # Redirect mobile.eurion.se to the main app (which is now mobile-friendly)
+    mobile-redirect:
+      rule: "Host(`mobile.eurion.se`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - mobile-redirect
+      tls:
+        certResolver: le
+      service: mobile-dummy
+
+  services:
+    # Dummy backend — never reached because the redirect middleware fires first
+    mobile-dummy:
+      loadBalancer:
+        servers:
+          - url: "http://localhost"

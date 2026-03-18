@@ -1,0 +1,294 @@
+{
+  "id": null,
+  "uid": "stalwart-mail",
+  "title": "Stalwart Mail Server",
+  "tags": ["mail", "eurion", "stalwart"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Mail Server Status",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "up{job=\"stalwart\"}",
+          "legendFormat": "Status",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "color": "red", "text": "DOWN" }, "1": { "color": "green", "text": "UP" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": 0 }, { "color": "green", "value": 1 }] }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Messages Received (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "increase(stalwart_message_ingress_total{job=\"stalwart\"}[1h])",
+          "legendFormat": "Received",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": 0 }] }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Messages Delivered (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "increase(stalwart_message_delivery_total{job=\"stalwart\"}[1h])",
+          "legendFormat": "Delivered",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": 0 }] }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Queue Depth",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "stalwart_queue_count{job=\"stalwart\"}",
+          "legendFormat": "In Queue",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 100 }] }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Spam Blocked (1h)",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "increase(stalwart_message_spam_total{job=\"stalwart\"}[1h])",
+          "legendFormat": "Spam",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": 0 }] }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Active Connections",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "sum(stalwart_connection_count{job=\"stalwart\"}) or vector(0)",
+          "legendFormat": "Connections",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": 0 }] }
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Message Throughput",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "rate(stalwart_message_ingress_total{job=\"stalwart\"}[5m]) * 60",
+          "legendFormat": "Received/min",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(stalwart_message_delivery_total{job=\"stalwart\"}[5m]) * 60",
+          "legendFormat": "Delivered/min",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(stalwart_message_spam_total{job=\"stalwart\"}[5m]) * 60",
+          "legendFormat": "Spam/min",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "reqpm"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Connections by Protocol",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "stalwart_connection_count{job=\"stalwart\"}",
+          "legendFormat": "{{listener}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Queue Depth Over Time",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "stalwart_queue_count{job=\"stalwart\"}",
+          "legendFormat": "Queued Messages",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "color": { "fixedColor": "orange", "mode": "fixed" }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Authentication Events",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "rate(stalwart_auth_success_total{job=\"stalwart\"}[5m]) * 60",
+          "legendFormat": "Auth Success/min",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(stalwart_auth_failed_total{job=\"stalwart\"}[5m]) * 60",
+          "legendFormat": "Auth Failed/min",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Auth Failed/min" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "type": "barchart",
+      "title": "Message Outcomes (Last 24h)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "options": { "barWidth": 0.97, "legend": { "displayMode": "list", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "increase(stalwart_message_ingress_total{job=\"stalwart\"}[24h])",
+          "legendFormat": "Received",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(stalwart_message_delivery_total{job=\"stalwart\"}[24h])",
+          "legendFormat": "Delivered",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(stalwart_message_spam_total{job=\"stalwart\"}[24h])",
+          "legendFormat": "Spam",
+          "refId": "C"
+        },
+        {
+          "expr": "increase(stalwart_message_rejected_total{job=\"stalwart\"}[24h]) or vector(0)",
+          "legendFormat": "Rejected",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "DNS Query Performance",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "rate(stalwart_dns_queries_total{job=\"stalwart\"}[5m]) * 60",
+          "legendFormat": "DNS Queries/min",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(stalwart_dns_error_total{job=\"stalwart\"}[5m]) * 60",
+          "legendFormat": "DNS Errors/min",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "DNS Errors/min" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      }
+    }
+  ],
+  "templating": { "list": [] },
+  "annotations": { "list": [] }
+}

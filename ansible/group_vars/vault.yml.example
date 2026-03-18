@@ -1,0 +1,28 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# EURION — Ansible Vault Secrets (EXAMPLE)
+#
+# Copy this to vault.yml and encrypt:
+#   cp vault.yml.example vault.yml
+#   ansible-vault encrypt vault.yml
+#
+# Then edit with:
+#   ansible-vault edit vault.yml
+#
+# Run playbook with:
+#   ansible-playbook site.yml --ask-vault-pass
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Generate strong passwords (32+ chars):
+#   openssl rand -base64 32
+
+vault_postgres_password: "CHANGE_ME_postgres_password"
+vault_redis_password: "CHANGE_ME_redis_password"
+vault_minio_password: "CHANGE_ME_minio_password"
+vault_meilisearch_key: "CHANGE_ME_meilisearch_master_key_min_16_bytes"
+vault_jwt_secret: "CHANGE_ME_jwt_secret_64_chars"
+vault_internal_api_key: "CHANGE_ME_internal_api_key"
+vault_turn_secret: "CHANGE_ME_turn_credential"
+vault_grafana_password: "CHANGE_ME_grafana_admin_password"
+
+# Optional: sudo password for deploy user
+# vault_become_pass: "CHANGE_ME_sudo_password"

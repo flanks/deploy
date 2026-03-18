@@ -1,0 +1,9 @@
+  # ─── Stalwart Prometheus metrics ─────────────────────────────────────────
+  - job_name: stalwart
+    static_configs:
+      - targets: ["eurion-stalwart:8080"]
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: stalwart-mail
+

@@ -1,0 +1,155 @@
+---
+# Verify role — Health checks and validation of the deployment
+
+- name: "═══ EURION Deployment Verification ═══"
+  ansible.builtin.debug:
+    msg: "Running comprehensive health checks..."
+
+# ── DNS Resolution ───────────────────────────────────────────────────────────
+- name: Verify DNS records
+  ansible.builtin.command:
+    cmd: "dig +short {{ item }}"
+  register: dns_results
+  loop:
+    - "{{ app_domain }}"
+    - "{{ api_domain }}"
+    - "{{ meet_domain }}"
+    - "{{ admin_domain }}"
+  changed_when: false
+  failed_when: false
+
+- name: Display DNS results
+  ansible.builtin.debug:
+    msg: "{{ item.item }}: {{ item.stdout | default('UNRESOLVABLE') }}"
+  loop: "{{ dns_results.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# ── Port Accessibility ───────────────────────────────────────────────────────
+- name: Check essential ports
+  ansible.builtin.wait_for:
+    host: "127.0.0.1"
+    port: "{{ item.port }}"
+    timeout: 10
+    state: started
+  loop:
+    - { port: 80, name: "HTTP" }
+    - { port: 443, name: "HTTPS" }
+    - { port: 5432, name: "PostgreSQL" }
+    - { port: 6379, name: "Redis" }
+    - { port: 9092, name: "Kafka" }
+    - { port: 9000, name: "MinIO" }
+  register: port_results
+  failed_when: false
+
+# ── Service Health Checks ────────────────────────────────────────────────────
+- name: Health check all services
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/health"
+    method: GET
+    timeout: 10
+    status_code: 200
+  register: health_results
+  loop: "{{ services }}"
+  when: item.required | string | lower in ['true', 'yes']
+  failed_when: false
+
+- name: Build health summary
+  ansible.builtin.set_fact:
+    health_summary: "{{ health_summary | default([]) + [{'service': item.item.name, 'port': item.item.port, 'status': 'HEALTHY' if item.status | default(0) == 200 else 'UNHEALTHY', 'code': item.status | default('N/A')}] }}"
+  loop: "{{ health_results.results }}"
+  when: item.item is defined
+  loop_control:
+    label: "{{ item.item.name | default('skip') }}"
+
+# ── TLS Verification ────────────────────────────────────────────────────────
+- name: Verify HTTPS connectivity
+  ansible.builtin.uri:
+    url: "https://{{ api_domain }}/health"
+    method: GET
+    timeout: 15
+    status_code: [200, 301, 302]
+    validate_certs: "{{ tls_method != 'selfsigned' }}"
+  register: tls_check
+  failed_when: false
+
+# ── Database Connectivity ────────────────────────────────────────────────────
+- name: Verify database accessibility
+  ansible.builtin.command:
+    cmd: >
+      docker exec eurion-postgres psql -U eurion -d eurion_identity
+      -c "SELECT 1 as connected"
+  register: db_check
+  changed_when: false
+  failed_when: false
+  when: deploy_mode in ['docker', 'airgapped']
+
+# ── Kafka Topics ─────────────────────────────────────────────────────────────
+- name: Check Kafka topics
+  ansible.builtin.command:
+    cmd: "docker exec eurion-kafka kafka-topics.sh --bootstrap-server localhost:9092 --list"
+  register: kafka_topics
+  changed_when: false
+  failed_when: false
+  when: deploy_mode in ['docker', 'airgapped']
+
+# ── MinIO Buckets ────────────────────────────────────────────────────────────
+- name: Verify MinIO buckets
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:9000/minio/health/live"
+    status_code: 200
+  register: minio_check
+  failed_when: false
+
+# ── Display Summary ──────────────────────────────────────────────────────────
+- name: Display deployment health summary
+  ansible.builtin.debug:
+    msg: |
+      ╔══════════════════════════════════════════════════════════════╗
+      ║              EURION Deployment Health Report                 ║
+      ╠══════════════════════════════════════════════════════════════╣
+      ║                                                             ║
+      ║  Organization: {{ org_name }}
+      ║  Domain:       {{ domain }}
+      ║  Mode:         {{ deploy_mode }}
+      ║                                                             ║
+      ║  ─── Service Health ───────────────────────────────────     ║
+      {% for svc in health_summary | default([]) %}
+      ║  {{ '✓' if svc.status == 'HEALTHY' else '✗' }}  {{ "%-30s" | format(svc.service) }} :{{ svc.port }}  {{ svc.status }}
+      {% endfor %}
+      ║                                                             ║
+      ║  ─── Infrastructure ───────────────────────────────────     ║
+      ║  PostgreSQL:  {{ '✓ Connected' if (db_check.rc | default(1)) == 0 else '✗ Unreachable' }}
+      ║  Redis:       {{ '✓ Running' if (port_results.results[3].state | default('')) == 'started' else '✗ Down' }}
+      ║  Kafka:       {{ '✓ Running' if (kafka_topics.rc | default(1)) == 0 else '✗ Down' }}
+      ║  MinIO:       {{ '✓ Running' if (minio_check.status | default(0)) == 200 else '✗ Down' }}
+      ║                                                             ║
+      ║  ─── TLS ──────────────────────────────────────────────     ║
+      ║  HTTPS:       {{ '✓ Working' if (tls_check.status | default(0)) in [200, 301, 302] else '⚠ Check DNS and ports' }}
+      ║  Method:      {{ tls_method }}
+      ║                                                             ║
+      ║  ─── Endpoints ────────────────────────────────────────     ║
+      ║  App:         https://{{ app_domain }}
+      ║  API:         https://{{ api_domain }}
+      ║  Meet:        https://{{ meet_domain }}
+      ║  Admin:       https://{{ admin_domain }}
+      {% if feature_monitoring | default(true) | bool %}
+      ║  Grafana:     https://{{ admin_domain }}/grafana
+      {% endif %}
+      ║                                                             ║
+      ╚══════════════════════════════════════════════════════════════╝
+
+# ── Set overall result ───────────────────────────────────────────────────────
+- name: Count unhealthy services
+  ansible.builtin.set_fact:
+    unhealthy_count: "{{ health_summary | default([]) | selectattr('status', 'equalto', 'UNHEALTHY') | list | length }}"
+
+- name: Warn about unhealthy services
+  ansible.builtin.debug:
+    msg: "⚠ {{ unhealthy_count }} service(s) are unhealthy. Check logs with: docker logs eurion-<service-name>"
+  when: unhealthy_count | int > 0
+
+- name: All services healthy
+  ansible.builtin.debug:
+    msg: "✓ All services are healthy! Deployment successful."
+  when: unhealthy_count | int == 0

@@ -1,0 +1,110 @@
+---
+# ╔════════════════════════════════════════════════════════════════════════════════╗
+# ║  EURION — Customer Deployment Master Playbook                                ║
+# ║                                                                              ║
+# ║  Usage:                                                                      ║
+# ║    ansible-playbook site.yml -e @vars.yml -e @secrets.yml --ask-vault-pass   ║
+# ║                                                                              ║
+# ║  Tags:                                                                       ║
+# ║    prereqs    — Install OS packages, Docker/K8s, configure system            ║
+# ║    configure  — Generate configs, create directories, pull images            ║
+# ║    deploy     — Deploy all stacks (infra → services → gateway)               ║
+# ║    verify     — Health checks and validation                                 ║
+# ║    backup     — Configure automated backups                                  ║
+# ║    full       — Run everything (default)                                     ║
+# ║                                                                              ║
+# ║  Selective:                                                                  ║
+# ║    --tags prereqs,deploy    — Only prerequisites + deploy                    ║
+# ║    --tags verify            — Only run health checks                         ║
+# ║    --skip-tags backup       — Everything except backup setup                 ║
+# ╚════════════════════════════════════════════════════════════════════════════════╝
+
+- name: "Eurion Platform — Customer Deployment"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    eurion_version: "{{ eurion_version | default('latest') }}"
+    deploy_mode: "{{ deploy_mode | default('docker') }}"
+
+  pre_tasks:
+    - name: Display deployment banner
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════╗
+          ║        EURION Platform Deployment                ║
+          ║        Organization: {{ org_name | default('N/A') }}
+          ║        Domain:       {{ domain | default('N/A') }}
+          ║        Mode:         {{ deploy_mode }}
+          ║        Version:      {{ eurion_version }}
+          ╚══════════════════════════════════════════════════╝
+      tags: always
+
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - domain is defined and domain | length > 0
+          - org_name is defined and org_name | length > 0
+          - deploy_mode in ['docker', 'kubernetes', 'airgapped']
+          - postgres_password is defined
+          - redis_password is defined
+          - jwt_secret is defined
+        fail_msg: "Missing required deployment variables. Run install.sh first."
+      tags: always
+
+    - name: Set computed variables
+      ansible.builtin.set_fact:
+        eurion_db_url_prefix: "postgresql://eurion:{{ postgres_password }}@{{ private_ip | default('127.0.0.1') }}:5432"
+        eurion_redis_url: "redis://:{{ redis_password }}@{{ private_ip | default('127.0.0.1') }}:6379"
+        eurion_kafka_brokers: "{{ private_ip | default('127.0.0.1') }}:9092"
+        eurion_s3_endpoint: "http://{{ private_ip | default('127.0.0.1') }}:9000"
+        eurion_meili_url: "http://{{ private_ip | default('127.0.0.1') }}:7700"
+        enabled_services: "{{ services | selectattr('required', 'equalto', true) | list + services | selectattr('required', 'equalto', 'True') | list }}"
+      tags: always
+
+  roles:
+    # ── Phase 1: System Prerequisites ──────────────────────────────────────
+    - role: prerequisites
+      tags: [prereqs, full]
+
+    # ── Phase 2: Configure & Generate ──────────────────────────────────────
+    - role: configure
+      tags: [configure, full]
+
+    # ── Phase 3: Deploy Infrastructure ─────────────────────────────────────
+    - role: deploy_docker
+      when: deploy_mode in ['docker', 'airgapped']
+      tags: [deploy, full]
+
+    - role: deploy_kubernetes
+      when: deploy_mode == 'kubernetes'
+      tags: [deploy, full]
+
+    # ── Phase 4: Verify Deployment ─────────────────────────────────────────
+    - role: verify
+      tags: [verify, full]
+
+    # ── Phase 5: Backup Configuration ──────────────────────────────────────
+    - role: backup
+      tags: [backup, full]
+
+  post_tasks:
+    - name: Deployment complete
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════╗
+          ║  ✓ EURION deployment complete!                   ║
+          ║                                                  ║
+          ║  Web App:   https://{{ app_domain }}              ║
+          ║  API:       https://{{ api_domain }}              ║
+          ║  Admin:     https://{{ admin_domain }}            ║
+          ║  Meet:      https://{{ meet_domain }}             ║
+          ║                                                  ║
+          ║  Admin Login:                                    ║
+          ║    Email:    {{ admin_email }}                    ║
+          ║    Password: (see DEPLOY_SUMMARY.md)             ║
+          ║                                                  ║
+          ║  ⚠  Change admin password immediately!           ║
+          ╚══════════════════════════════════════════════════╝
+      tags: always

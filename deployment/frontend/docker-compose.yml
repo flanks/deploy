@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# EURION — Frontend Web App (React SPA served via Nginx)
+#
+# This compose file manages the main web frontend with proper Traefik labels
+# for HTTPS routing. Previously deployed via manual `docker run` which was
+# fragile (PowerShell backtick escaping corrupted Host rules).
+#
+# Build: cd /opt/eurion/source/frontend/web && docker build -t eurion/frontend:latest .
+# Deploy: cd /opt/eurion/frontend && docker compose up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  eurion-net:
+    external: true
+    name: eurion-net
+
+services:
+
+  frontend:
+    image: eurion/frontend:latest
+    container_name: eurion-frontend
+    restart: always
+    networks:
+      - eurion-net
+    labels:
+      - "traefik.enable=true"
+      # Main web app route — app.eurion.se
+      - "traefik.http.routers.frontend.rule=Host(`${APP_DOMAIN:-app.eurion.se}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+      # Security headers
+      - "traefik.http.routers.frontend.middlewares=security-headers@file"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"

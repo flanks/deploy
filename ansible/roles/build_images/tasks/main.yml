@@ -1,0 +1,77 @@
+---
+# roles/build_images/tasks/main.yml
+#
+# Builds all Docker images sequentially.
+# Logs for each build go to /tmp/eurion-builds/<name>.log
+
+- name: Create build log directory
+  ansible.builtin.file:
+    path: /tmp/eurion-builds
+    state: directory
+    mode: "0755"
+
+- name: Build all Docker images
+  ansible.builtin.shell: |
+    echo "[$(date +%T)] Building {{ item.name }}..."
+    docker build \
+      -f {{ eurion_source_remote }}/{{ item.dockerfile }} \
+      -t eurion/{{ item.name }}:{{ image_tag }} \
+      {{ eurion_source_remote }} \
+      2>&1 | tee /tmp/eurion-builds/{{ item.name }}.log
+    result=${PIPESTATUS[0]}
+    if [ $result -ne 0 ]; then
+      echo "BUILD FAILED: {{ item.name }} (exit $result)"
+      tail -20 /tmp/eurion-builds/{{ item.name }}.log
+    else
+      echo "BUILD OK: {{ item.name }}"
+    fi
+    exit $result
+  args:
+    executable: /bin/bash
+  loop: "{{ build_batch_1 + build_batch_2 }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: build_results
+  changed_when: true
+
+- name: Show build summary
+  ansible.builtin.debug:
+    msg: "{{ item.item.name }}: {{ 'OK' if item.rc == 0 else 'FAILED — see /tmp/eurion-builds/' + item.item.name + '.log' }}"
+  loop: "{{ build_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+# ── Frontend build (different context path) ───────────────────────────────────
+- name: Build frontend web app image
+  ansible.builtin.shell: |
+    echo "[$(date +%T)] Building frontend..."
+    docker build \
+      -f {{ eurion_source_remote }}/frontend/web/Dockerfile \
+      -t eurion/frontend:{{ image_tag }} \
+      {{ eurion_source_remote }}/frontend/web \
+      2>&1 | tee /tmp/eurion-builds/frontend.log
+    result=${PIPESTATUS[0]}
+    if [ $result -ne 0 ]; then
+      echo "BUILD FAILED: frontend (exit $result)"
+      tail -20 /tmp/eurion-builds/frontend.log
+    else
+      echo "BUILD OK: frontend"
+    fi
+    exit $result
+  args:
+    executable: /bin/bash
+  register: frontend_build
+  changed_when: true
+
+- name: Show frontend build result
+  ansible.builtin.debug:
+    msg: "frontend: {{ 'OK' if frontend_build.rc == 0 else 'FAILED — see /tmp/eurion-builds/frontend.log' }}"
+
+- name: List all built images
+  ansible.builtin.shell: sudo docker images --format "table {% raw %}{{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}{% endraw %}" | grep eurion
+  register: image_list
+  changed_when: false
+
+- name: Show built images
+  ansible.builtin.debug:
+    msg: "{{ image_list.stdout_lines }}"

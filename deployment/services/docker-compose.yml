@@ -1,0 +1,619 @@
+networks:
+  eurion-net:
+    external: true
+    name: eurion-net
+
+services:
+
+  # --- API Gateway (:3000) ------------------------------------------------
+  gateway:
+    image: eurion/gateway:latest
+    container_name: eurion-gateway
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-gateway
+      SERVICE_PORT: "3000"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-postgres:5432/postgres
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: gateway
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      JWT_ACCESS_EXPIRY: 15m
+      JWT_REFRESH_EXPIRY: 7d
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "200"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      ENABLE_SWAGGER: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.eurion.se`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=le"
+      - "traefik.http.services.api.loadbalancer.server.port=3000"
+
+  # --- Identity Service (:3001) -------------------------------------------
+  identity-service:
+    image: eurion/identity-service:latest
+    container_name: eurion-identity-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-identity-service
+      SERVICE_PORT: "3001"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_identity
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: identity-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      JWT_ACCESS_EXPIRY: 15m
+      JWT_REFRESH_EXPIRY: 7d
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      DB_POOL_MAX: "15"
+      DB_POOL_MIN: "3"
+      SMTP_HOST: smtp.eu.mailgun.org
+      SMTP_PORT: "587"
+      SMTP_USER: postmaster@eurion.se
+      SMTP_PASS: ${MAILGUN_SMTP_PASS}
+      SMTP_FROM: "Eurion Calendar <postmaster@eurion.se>"
+      WEB_APP_URL: https://app.eurion.se
+      API_BASE_URL: https://app.eurion.se/api
+      REGISTRATION_OPEN: "false"
+      REGISTRATION_ALLOWED_DOMAINS: eurion.se
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Org Service (:3002) ------------------------------------------------
+  org-service:
+    image: eurion/org-service:latest
+    container_name: eurion-org-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-org-service
+      SERVICE_PORT: "3002"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_org
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: org-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      DB_POOL_MAX: "8"
+      DB_POOL_MIN: "2"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3002/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Audit Service (:3003) ----------------------------------------------
+  audit-service:
+    image: eurion/audit-service:latest
+    container_name: eurion-audit-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-audit-service
+      SERVICE_PORT: "3003"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_audit
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: audit-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      DB_POOL_MAX: "10"
+      DB_POOL_MIN: "2"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3003/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Messaging Service (:3004) ------------------------------------------
+  messaging-service:
+    image: eurion/messaging-service:latest
+    container_name: eurion-messaging-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-messaging-service
+      SERVICE_PORT: "3004"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_messaging
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: messaging-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      WEB_APP_URL: https://app.eurion.se
+      RATE_LIMIT_MAX: "200"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      DB_POOL_MAX: "20"
+      DB_POOL_MIN: "4"
+      MAX_WS_PER_USER: "5"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.5"
+        reservations:
+          memory: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3004/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- File Service (:3005) -----------------------------------------------
+  file-service:
+    image: eurion/file-service:latest
+    container_name: eurion-file-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-file-service
+      SERVICE_PORT: "3005"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_file
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: file-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      S3_ENDPOINT: http://eurion-minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: eurion-files
+      S3_REGION: eu-north-1
+      DB_POOL_MAX: "10"
+      DB_POOL_MIN: "2"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+        reservations:
+          memory: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3005/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Video Service (:3006) ----------------------------------------------
+  video-service:
+    image: eurion/video-service:latest
+    container_name: eurion-video-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-video-service
+      SERVICE_PORT: "3006"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_video
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: video-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      TURN_SERVER_URL: turn:turn.eurion.se:3478
+      TURN_USERNAME: eurion
+      TURN_PASSWORD: ${TURN_PASSWORD}
+      STUN_SERVER_URL: stun:turn.eurion.se:3478
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+        reservations:
+          memory: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3006/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Notification Service (:3007) ---------------------------------------
+  notification-service:
+    image: eurion/notification-service:latest
+    container_name: eurion-notification-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-notification-service
+      SERVICE_PORT: "3007"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_notification
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: notification-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      DB_POOL_MAX: "8"
+      DB_POOL_MIN: "2"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3007/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Admin Service (:3008) ----------------------------------------------
+  admin-service:
+    image: eurion/admin-service:latest
+    container_name: eurion-admin-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-admin-service
+      SERVICE_PORT: "3008"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: admin-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      DB_POOL_MAX: "8"
+      DB_POOL_MIN: "2"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3008/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Search Service (:3009) ---------------------------------------------
+  search-service:
+    image: eurion/search-service:latest
+    container_name: eurion-search-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-search-service
+      SERVICE_PORT: "3009"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_search
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: search-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      MEILISEARCH_URL: http://eurion-meilisearch:7700
+      MEILISEARCH_API_KEY: ${MEILI_MASTER_KEY}
+      DB_POOL_MAX: "5"
+      DB_POOL_MIN: "1"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3009/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- AI Service (:3010) -------------------------------------------------
+  ai-service:
+    image: eurion/ai-service:latest
+    container_name: eurion-ai-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-ai-service
+      SERVICE_PORT: "3010"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_ai
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: ai-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "30"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      OLLAMA_HOST: http://eurion-ollama:11434
+      DB_POOL_MAX: "5"
+      DB_POOL_MIN: "1"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3010/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Workflow Service (:3011) --------------------------------------------
+  workflow-service:
+    image: eurion/workflow-service:latest
+    container_name: eurion-workflow-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-workflow-service
+      SERVICE_PORT: "3011"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_workflow
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: workflow-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "60"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      DB_POOL_MAX: "5"
+      DB_POOL_MIN: "1"
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3011/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Preview Service (:3012) ---------------------------------------------
+  preview-service:
+    image: eurion/preview-service:latest
+    container_name: eurion-preview-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-preview-service
+      SERVICE_PORT: "3012"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_preview
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: preview-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "60"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      S3_ENDPOINT: http://eurion-minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      PREVIEW_BUCKET: eurion-files
+      GOTENBERG_URL: http://eurion-gotenberg:3000
+      FILE_SERVICE_URL: http://eurion-file-service:3005
+      INTERNAL_SECRET: ${INTERNAL_SECRET}
+    networks:
+      - eurion-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3012/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Transcription Service (:3013) --------------------------------------
+  transcription-service:
+    image: eurion/transcription-service:latest
+    container_name: eurion-transcription-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-transcription-service
+      SERVICE_PORT: "3013"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_transcription
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: transcription-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "200"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      WHISPER_ENDPOINT: http://eurion-whisper:9000
+      AI_SERVICE_URL: http://eurion-ai-service:3010
+    networks:
+      - eurion-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3013/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Bridge Service (:3014) � M365/Teams Interop -----------------------
+  bridge-service:
+    image: eurion/bridge-service:latest
+    container_name: eurion-bridge-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: eurion-bridge-service
+      SERVICE_PORT: "3014"
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://eurion:${POSTGRES_PASSWORD}@eurion-pgbouncer:5432/eurion_bridge
+      REDIS_URL: redis://:${REDIS_PASSWORD}@eurion-redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: bridge-service
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: EURION
+      CORS_ORIGINS: https://eurion.se,https://app.eurion.se,http://tauri.localhost,https://tauri.localhost
+      RATE_LIMIT_MAX: "200"
+      RATE_LIMIT_WINDOW_MS: "60000"
+      BRIDGE_TOKEN_ENC_KEY: ${BRIDGE_TOKEN_ENC_KEY}
+      BRIDGE_INTERNAL_SECRET: ${BRIDGE_INTERNAL_SECRET}
+      SMTP_HOST: ${SMTP_HOST:-smtp.eu.mailgun.org}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM:-Eurion <no-reply@mail.eurion.se>}
+      WEB_APP_URL: https://eurion.se
+      WEBHOOK_BASE_URL: https://api.eurion.se
+      GATEWAY_URL: http://eurion-gateway:3000
+      INTERNAL_DOMAINS: eurion.se,eurion.eu
+    networks:
+      - eurion-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3014/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Ollama (Local LLM for ai-service) -----------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: eurion-ollama
+    restart: always
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - eurion-net
+    deploy:
+      resources:
+        limits:
+          memory: 12g
+          cpus: "8.0"
+        reservations:
+          memory: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:11434/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # --- Gotenberg (PDF/Office conversion for preview-service) --------------
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: eurion-gotenberg
+    restart: always
+    command:
+      - "gotenberg"
+      - "--libreoffice-auto-start=true"
+      - "--libreoffice-restart-after=10"
+      - "--api-timeout=60s"
+    networks:
+      - eurion-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  ollama_data:

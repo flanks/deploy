@@ -1,0 +1,252 @@
+---
+# Deploy Docker role — Orchestrates the full Docker Compose deployment
+# Deployment order: network → infrastructure → storage → gateway → frontend → services → monitoring → coturn
+
+# ── Phase 0: Create Docker Network ──────────────────────────────────────────
+- name: Create eurion-net Docker network
+  community.docker.docker_network:
+    name: eurion-net
+    driver: bridge
+    ipam_config:
+      - subnet: "172.20.0.0/16"
+        gateway: "172.20.0.1"
+
+# ── Phase 1: Pull Docker Images ─────────────────────────────────────────────
+- name: Pull infrastructure images
+  community.docker.docker_image:
+    name: "{{ item }}"
+    source: pull
+  loop:
+    - "postgres:16-alpine"
+    - "redis:7-alpine"
+    - "bitnami/kafka:3.7"
+    - "minio/minio:latest"
+    - "minio/mc:latest"
+    - "traefik:v2.11"
+    - "gotenberg/gotenberg:8"
+    - "coturn/coturn:4.6.2-alpine"
+{% if feature_search | default(true) | bool %}
+    - "getmeili/meilisearch:v1.7"
+{% endif %}
+{% if feature_monitoring | default(true) | bool %}
+    - "prom/prometheus:v2.51.0"
+    - "grafana/grafana:10.4.1"
+    - "grafana/loki:2.9.5"
+    - "prom/node-exporter:latest"
+    - "gcr.io/cadvisor/cadvisor:latest"
+{% endif %}
+
+# ── Phase 1b: Load air-gapped images (if applicable) ────────────────────────
+- name: Load air-gapped image bundle
+  when: deploy_mode == 'airgapped'
+  block:
+    - name: Copy image bundle to server
+      ansible.builtin.copy:
+        src: "{{ airgap_bundle_path }}"
+        dest: "{{ eurion_root }}/eurion-images.tar.gz"
+        mode: '0644'
+
+    - name: Decompress image bundle
+      ansible.builtin.command:
+        cmd: "gunzip -k {{ eurion_root }}/eurion-images.tar.gz"
+      args:
+        creates: "{{ eurion_root }}/eurion-images.tar"
+
+    - name: Load Docker images from bundle
+      ansible.builtin.command:
+        cmd: "docker load -i {{ eurion_root }}/eurion-images.tar"
+      register: load_result
+      changed_when: "'Loaded image' in load_result.stdout"
+
+# ── Phase 2: Infrastructure (Postgres, Redis, Kafka) ────────────────────────
+- name: Deploy infrastructure stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_root }}/compose"
+    files:
+      - infrastructure.yml
+    env_files:
+      - .env
+    state: present
+    pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
+  register: infra_result
+
+- name: Wait for PostgreSQL to be healthy
+  ansible.builtin.command:
+    cmd: "docker exec eurion-postgres pg_isready -U eurion"
+  register: pg_ready
+  retries: 30
+  delay: 5
+  until: pg_ready.rc == 0
+  changed_when: false
+
+- name: Wait for Redis to be healthy
+  ansible.builtin.command:
+    cmd: "docker exec eurion-redis redis-cli -a {{ redis_password }} ping"
+  register: redis_ready
+  retries: 20
+  delay: 3
+  until: "'PONG' in redis_ready.stdout"
+  changed_when: false
+
+- name: Wait for Kafka to be healthy
+  ansible.builtin.command:
+    cmd: "docker exec eurion-kafka kafka-topics.sh --bootstrap-server localhost:9092 --list"
+  register: kafka_ready
+  retries: 30
+  delay: 5
+  until: kafka_ready.rc == 0
+  changed_when: false
+
+# ── Phase 3: Storage (MinIO, Meilisearch) ────────────────────────────────────
+- name: Deploy storage stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_root }}/compose"
+    files:
+      - storage.yml
+    env_files:
+      - .env
+    state: present
+    pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
+
+- name: Wait for MinIO to be healthy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:9000/minio/health/live"
+    status_code: 200
+  register: minio_health
+  retries: 20
+  delay: 5
+  until: minio_health.status == 200
+
+# ── Phase 4: Gateway (Traefik) ──────────────────────────────────────────────
+- name: Create Let's Encrypt data directory
+  ansible.builtin.file:
+    path: "{{ eurion_data }}/letsencrypt"
+    state: directory
+    mode: '0700'
+  when: tls_method == 'letsencrypt'
+
+- name: Deploy gateway stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_root }}/compose"
+    files:
+      - gateway.yml
+    env_files:
+      - .env
+    state: present
+    pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
+
+- name: Wait for Traefik to be healthy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:80"
+    status_code: [200, 301, 302, 404]
+  register: traefik_health
+  retries: 20
+  delay: 5
+  until: traefik_health.status is defined
+
+# ── Phase 5: Application Services ───────────────────────────────────────────
+- name: Deploy services stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_root }}/compose"
+    files:
+      - services.yml
+    env_files:
+      - .env
+    state: present
+    pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
+
+- name: Wait for gateway service to be healthy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:3000/health"
+    status_code: 200
+  register: gw_health
+  retries: 40
+  delay: 10
+  until: gw_health.status == 200
+
+- name: Wait for each service to be healthy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/health"
+    status_code: 200
+  register: svc_health
+  retries: 30
+  delay: 10
+  until: svc_health.status == 200
+  loop: "{{ services }}"
+  when: item.required | string | lower in ['true', 'yes']
+
+# ── Phase 6: Frontend ───────────────────────────────────────────────────────
+- name: Deploy frontend stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_root }}/compose"
+    files:
+      - frontend.yml
+    env_files:
+      - .env
+    state: present
+    pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
+
+# ── Phase 7: Monitoring (optional) ──────────────────────────────────────────
+- name: Deploy monitoring stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_root }}/compose"
+    files:
+      - monitoring.yml
+    env_files:
+      - .env
+    state: present
+    pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
+  when: feature_monitoring | default(true) | bool
+
+# ── Phase 8: Coturn (optional, for video) ────────────────────────────────────
+- name: Deploy coturn stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_root }}/compose"
+    files:
+      - coturn.yml
+    env_files:
+      - .env
+    state: present
+    pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
+  when: feature_video | default(true) | bool
+
+# ── Phase 9: Run Migrations ─────────────────────────────────────────────────
+- name: Run database migrations for each service
+  ansible.builtin.command:
+    cmd: "docker exec eurion-{{ item.name }} node dist/migrate.js"
+  register: migration_result
+  changed_when: "'Applied migration' in migration_result.stdout"
+  failed_when: migration_result.rc != 0
+  loop: "{{ services }}"
+  when:
+    - item.name != 'gateway'
+    - item.required | string | lower in ['true', 'yes']
+    - item.db != 'postgres'
+
+# ── Phase 10: Create Initial Admin User ──────────────────────────────────────
+- name: Check if initial admin exists
+  ansible.builtin.command:
+    cmd: >
+      docker exec eurion-postgres psql -U eurion -d eurion_identity -t -c
+      "SELECT COUNT(*) FROM users WHERE email='{{ admin_email }}'"
+  register: admin_check
+  changed_when: false
+  failed_when: false
+
+- name: Create initial admin user
+  ansible.builtin.command:
+    cmd: >
+      docker exec eurion-identity-service node -e "
+        const { createInitialAdmin } = require('./dist/service');
+        createInitialAdmin({
+          email: '{{ admin_email }}',
+          password: '{{ initial_admin_password }}',
+          name: 'Platform Admin',
+          orgName: '{{ org_name }}',
+          role: 'super-admin'
+        }).then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
+      "
+  when: admin_check.stdout | default('0') | trim | int == 0
+  register: admin_create
+  failed_when: false
+  changed_when: admin_create.rc == 0

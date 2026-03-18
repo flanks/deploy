@@ -1,0 +1,81 @@
+---
+# EURION — Rollback Playbook
+# Rolls back to a previous backup after a failed upgrade
+#
+# Usage:
+#   ansible-playbook rollback.yml -e @vars.yml -e @secrets.yml \
+#     -e backup_archive=/opt/eurion/backups/postgres/eurion-backup-YYYYMMDD_HHMMSS.tar.gz \
+#     --ask-vault-pass
+
+- name: "Eurion Platform — Rollback"
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Validate backup archive exists
+      ansible.builtin.stat:
+        path: "{{ backup_archive }}"
+      register: archive_stat
+      when: backup_archive is defined
+
+    - name: Fail if archive missing
+      ansible.builtin.assert:
+        that:
+          - backup_archive is defined
+          - archive_stat.stat.exists | default(false)
+        fail_msg: |
+          Please specify a valid backup archive:
+          -e backup_archive=/opt/eurion/backups/postgres/eurion-backup-YYYYMMDD_HHMMSS.tar.gz
+
+          Available backups:
+          ls -la {{ eurion_backups | default('/opt/eurion/backups') }}/postgres/
+
+  tasks:
+    - name: Display rollback info
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════╗
+          ║  ⚠ EURION Platform Rollback                      ║
+          ║  Archive: {{ backup_archive | basename }}
+          ║  This will OVERWRITE all current data!           ║
+          ╚══════════════════════════════════════════════════╝
+
+    - name: Stop application services
+      community.docker.docker_compose_v2:
+        project_src: "{{ eurion_root }}/compose"
+        files:
+          - services.yml
+        state: absent
+      when: deploy_mode in ['docker', 'airgapped']
+
+    - name: Run restore script
+      ansible.builtin.command:
+        cmd: "bash -c 'echo YES | {{ eurion_root }}/config/restore.sh {{ backup_archive }}'"
+      register: restore_result
+
+    - name: Restart services
+      community.docker.docker_compose_v2:
+        project_src: "{{ eurion_root }}/compose"
+        files:
+          - services.yml
+        env_files:
+          - .env
+        state: present
+      when: deploy_mode in ['docker', 'airgapped']
+
+    - name: Wait for services to come up
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item.port }}/health"
+        status_code: 200
+      register: health_check
+      retries: 30
+      delay: 10
+      until: health_check.status == 200
+      loop: "{{ services }}"
+      when: item.required | string | lower in ['true', 'yes']
+      failed_when: false
+
+    - name: Rollback complete
+      ansible.builtin.debug:
+        msg: "✓ Rollback complete. Services restored from {{ backup_archive | basename }}"

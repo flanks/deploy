@@ -1,0 +1,113 @@
+networks:
+  eurion-net:
+    external: true
+    name: eurion-net
+
+volumes:
+  gateway_traefik_certs:
+    external: true
+    name: gateway_traefik_certs
+
+services:
+
+  # --- Traefik Certs Dumper ---
+  certs-dumper:
+    image: ldez/traefik-certs-dumper:v2.8.3
+    container_name: eurion-certs-dumper
+    restart: always
+    volumes:
+      - gateway_traefik_certs:/traefik:ro
+      - /opt/eurion/stalwart/certs:/output
+    command: file --source /traefik/acme.json --dest /output --watch --domain-subdir=true --crt-name=certificate.crt --key-name=privatekey.key
+    networks:
+      - eurion-net
+
+  # --- Mailgun Inbound Relay ---
+  mailgun-inbound:
+    build: ./mailgun-inbound
+    image: eurion-mailgun-inbound:latest
+    container_name: eurion-mailgun-inbound
+    restart: always
+    environment:
+      - PORT=8025
+      - STALWART_HOST=eurion-stalwart
+      - STALWART_PORT=25
+      - STALWART_IMAP_PORT=993
+      - IMAP_ADMIN_USER=admin
+      - IMAP_ADMIN_PASS=
+      - MAILGUN_SIGNING_KEY=${MAILGUN_SIGNING_KEY}
+      - MAILGUN_API_KEY=${MAILGUN_API_KEY}
+      - LOG_LEVEL=debug
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mailgun-inbound.rule=Host(`api.eurion.se`) && Path(`/v1/mail/inbound`)"
+      - "traefik.http.routers.mailgun-inbound.entrypoints=websecure"
+      - "traefik.http.routers.mailgun-inbound.tls.certresolver=le"
+      - "traefik.http.routers.mailgun-inbound.priority=100"
+      - "traefik.http.routers.mailgun-inbound.middlewares=strip-mail-prefix"
+      - "traefik.http.middlewares.strip-mail-prefix.stripprefix.prefixes=/v1/mail"
+      - "traefik.http.services.mailgun-inbound.loadbalancer.server.port=8025"
+    networks:
+      - eurion-net
+
+  # --- Stalwart Mail Server ---
+  stalwart-mail:
+    image: stalwartlabs/stalwart:latest
+    container_name: eurion-stalwart
+    restart: always
+    depends_on:
+      - certs-dumper
+    ports:
+      - "25:25"
+      - "587:587"
+      - "465:465"
+      - "143:143"
+      - "993:993"
+      - "4190:4190"
+    volumes:
+      - /opt/eurion/stalwart:/opt/stalwart
+    environment:
+      - TZ=Europe/Stockholm
+      - MAILGUN_SMTP_PASS=${MAILGUN_SMTP_PASS}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mail.rule=Host(`mail.eurion.se`)"
+      - "traefik.http.routers.mail.entrypoints=websecure"
+      - "traefik.http.routers.mail.tls.certresolver=le"
+      - "traefik.http.services.mail.loadbalancer.server.port=8080"
+    networks:
+      - eurion-net
+
+  # --- Roundcube Webmail ---
+  # Open-source webmail client connecting to Stalwart via IMAP/SMTP
+  # Custom image adds cociweb/calendar plugin with CalDAV backend
+  webmail:
+    build:
+      context: .
+      dockerfile: Dockerfile.webmail
+    image: eurion-webmail:latest
+    container_name: eurion-webmail
+    restart: always
+    depends_on:
+      - stalwart-mail
+    volumes:
+      - /opt/eurion/webmail/db:/var/roundcube/db
+      - /opt/eurion/webmail/config/config.inc.php:/var/www/html/config/config.inc.php:ro
+    environment:
+      - ROUNDCUBEMAIL_DEFAULT_HOST=ssl://eurion-stalwart
+      - ROUNDCUBEMAIL_DEFAULT_PORT=993
+      - ROUNDCUBEMAIL_SMTP_SERVER=tls://eurion-stalwart
+      - ROUNDCUBEMAIL_SMTP_PORT=587
+      - ROUNDCUBEMAIL_DB_TYPE=sqlite
+      - ROUNDCUBEMAIL_SKIN=elastic
+      - ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE=25M
+      - ROUNDCUBEMAIL_PLUGINS=archive,zipdownload,managesieve,calendar
+      - ROUNDCUBEMAIL_ASPELL_DICTS=en
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.webmail.rule=Host(`webmail.eurion.se`)"
+      - "traefik.http.routers.webmail.entrypoints=websecure"
+      - "traefik.http.routers.webmail.tls.certresolver=le"
+      - "traefik.http.services.webmail.loadbalancer.server.port=80"
+    networks:
+      - eurion-net

@@ -1,0 +1,23 @@
+---
+# roles/deploy_stacks/tasks/wait_for_health.yml
+# Polls docker inspect until all listed containers show "healthy" or timeout.
+
+- name: "Wait for {{ stack_name }} containers to be healthy"
+  ansible.builtin.shell: |
+    sudo docker inspect {{ item }} \
+      --format '{% raw %}{{.State.Health.Status}}{% endraw %}' 2>/dev/null || echo "missing"
+  loop: "{{ containers }}"
+  register: health_check
+  until: health_check.stdout in ['healthy', 'running']
+  retries: "{{ (wait_seconds / 5) | int }}"
+  delay: 5
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+
+- name: "Show {{ stack_name }} health status"
+  ansible.builtin.debug:
+    msg: "{{ item.item }}: {{ item.stdout }}"
+  loop: "{{ health_check.results }}"
+  loop_control:
+    label: "{{ item.item }}"

@@ -1,0 +1,200 @@
+---
+# Configure role — Generate all configuration files and templates
+
+# ── TLS Certificates ─────────────────────────────────────────────────────────
+- name: Generate self-signed TLS certificate
+  when: tls_method == 'selfsigned'
+  block:
+    - name: Generate TLS private key
+      community.crypto.openssl_privatekey:
+        path: "{{ eurion_root }}/tls/privkey.pem"
+        size: 4096
+        mode: '0600'
+
+    - name: Generate TLS CSR
+      community.crypto.openssl_csr:
+        path: "{{ eurion_root }}/tls/cert.csr"
+        privatekey_path: "{{ eurion_root }}/tls/privkey.pem"
+        common_name: "{{ domain }}"
+        subject_alt_name:
+          - "DNS:{{ app_domain }}"
+          - "DNS:{{ api_domain }}"
+          - "DNS:{{ meet_domain }}"
+          - "DNS:{{ admin_domain }}"
+          - "DNS:turn.{{ domain }}"
+        mode: '0644'
+
+    - name: Generate self-signed certificate
+      community.crypto.x509_certificate:
+        path: "{{ eurion_root }}/tls/fullchain.pem"
+        privatekey_path: "{{ eurion_root }}/tls/privkey.pem"
+        csr_path: "{{ eurion_root }}/tls/cert.csr"
+        provider: selfsigned
+        selfsigned_not_after: "+365d"
+        mode: '0644'
+
+- name: Copy custom TLS certificate
+  when: tls_method == 'custom'
+  block:
+    - name: Copy TLS certificate
+      ansible.builtin.copy:
+        src: "{{ tls_cert_path }}"
+        dest: "{{ eurion_root }}/tls/fullchain.pem"
+        mode: '0644'
+
+    - name: Copy TLS private key
+      ansible.builtin.copy:
+        src: "{{ tls_key_path }}"
+        dest: "{{ eurion_root }}/tls/privkey.pem"
+        mode: '0600'
+
+# ── Docker Compose Files ─────────────────────────────────────────────────────
+- name: Generate Docker Compose files
+  when: deploy_mode in ['docker', 'airgapped']
+  block:
+    - name: Template infrastructure compose
+      ansible.builtin.template:
+        src: docker/infrastructure.yml.j2
+        dest: "{{ eurion_root }}/compose/infrastructure.yml"
+        mode: '0640'
+
+    - name: Template init-databases SQL
+      ansible.builtin.template:
+        src: docker/init-databases.sql.j2
+        dest: "{{ eurion_root }}/config/init-databases.sql"
+        mode: '0644'
+
+    - name: Template services compose
+      ansible.builtin.template:
+        src: docker/services.yml.j2
+        dest: "{{ eurion_root }}/compose/services.yml"
+        mode: '0640'
+
+    - name: Template gateway compose
+      ansible.builtin.template:
+        src: docker/gateway.yml.j2
+        dest: "{{ eurion_root }}/compose/gateway.yml"
+        mode: '0640'
+
+    - name: Template storage compose
+      ansible.builtin.template:
+        src: docker/storage.yml.j2
+        dest: "{{ eurion_root }}/compose/storage.yml"
+        mode: '0640'
+
+    - name: Template Traefik dynamic config
+      ansible.builtin.template:
+        src: docker/traefik-dynamic.yml.j2
+        dest: "{{ eurion_root }}/config/traefik-dynamic.yml"
+        mode: '0644'
+
+    - name: Template frontend compose
+      ansible.builtin.template:
+        src: docker/frontend.yml.j2
+        dest: "{{ eurion_root }}/compose/frontend.yml"
+        mode: '0640'
+
+    - name: Template monitoring compose
+      ansible.builtin.template:
+        src: docker/monitoring.yml.j2
+        dest: "{{ eurion_root }}/compose/monitoring.yml"
+        mode: '0640'
+      when: feature_monitoring | default(true) | bool
+
+    - name: Template Prometheus config
+      ansible.builtin.template:
+        src: docker/prometheus.yml.j2
+        dest: "{{ eurion_root }}/config/prometheus.yml"
+        mode: '0644'
+      when: feature_monitoring | default(true) | bool
+
+    - name: Template Grafana datasources
+      ansible.builtin.template:
+        src: docker/grafana-datasources.yml.j2
+        dest: "{{ eurion_root }}/config/grafana-datasources.yml"
+        mode: '0644'
+      when: feature_monitoring | default(true) | bool
+
+    - name: Template Loki config
+      ansible.builtin.template:
+        src: docker/loki.yml.j2
+        dest: "{{ eurion_root }}/config/loki.yml"
+        mode: '0644'
+      when: feature_monitoring | default(true) | bool
+
+    - name: Template TURN server config
+      ansible.builtin.template:
+        src: docker/turnserver.conf.j2
+        dest: "{{ eurion_root }}/config/turnserver.conf"
+        mode: '0644'
+      when: feature_video | default(true) | bool
+
+    - name: Template coturn compose
+      ansible.builtin.template:
+        src: docker/coturn.yml.j2
+        dest: "{{ eurion_root }}/compose/coturn.yml"
+        mode: '0640'
+      when: feature_video | default(true) | bool
+
+    - name: Template .env file
+      ansible.builtin.template:
+        src: docker/env.j2
+        dest: "{{ eurion_root }}/compose/.env"
+        mode: '0600'
+
+# ── Kubernetes Manifests ─────────────────────────────────────────────────────
+- name: Generate Kubernetes manifests
+  when: deploy_mode == 'kubernetes'
+  block:
+    - name: Create K8s manifest directory
+      ansible.builtin.file:
+        path: "{{ eurion_root }}/k8s/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - base
+        - services
+        - monitoring
+        - secrets
+
+    - name: Template K8s namespace manifest
+      ansible.builtin.template:
+        src: k8s/namespaces.yml.j2
+        dest: "{{ eurion_root }}/k8s/base/namespaces.yml"
+        mode: '0644'
+
+    - name: Template K8s secrets
+      ansible.builtin.template:
+        src: k8s/secrets.yml.j2
+        dest: "{{ eurion_root }}/k8s/secrets/secrets.yml"
+        mode: '0600'
+
+    - name: Template K8s service deployments
+      ansible.builtin.template:
+        src: k8s/service-deployment.yml.j2
+        dest: "{{ eurion_root }}/k8s/services/{{ item.name }}.yml"
+        mode: '0644'
+      loop: "{{ services }}"
+      when: item.required | bool
+
+    - name: Template K8s ingress
+      ansible.builtin.template:
+        src: k8s/ingress.yml.j2
+        dest: "{{ eurion_root }}/k8s/base/ingress.yml"
+        mode: '0644'
+
+# ── Logrotate ────────────────────────────────────────────────────────────────
+- name: Configure logrotate for Eurion
+  ansible.builtin.copy:
+    content: |
+      {{ eurion_logs }}/*.log {
+          daily
+          rotate 30
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0644 root root
+      }
+    dest: /etc/logrotate.d/eurion
+    mode: '0644'

@@ -1,0 +1,80 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+
+# Rust / Tauri build artifacts
+eu-teams/frontend/desktop/src-tauri/target/
+
+# React Native
+eu-teams/frontend/mobile/android/
+eu-teams/frontend/mobile/ios/
+eu-teams/frontend/mobile/.gradle/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage
+coverage/
+lcov.info
+
+# Temp files
+temp-rn-scaffold/
+*.tmp
+*.temp
+
+# Temp build/fix scripts at repo root (one-off debugging artifacts)
+# Note: leading slash = root-level only, so ansible/roles/**/*.py are NOT excluded
+/fix-*.py
+/fix_*.py
+/rebuild-*.sh
+/rewrite_*.py
+/run-migrations.sh
+/build-services.sh
+
+# Archives (never commit large tarballs)
+*.tar.gz
+
+# Secrets
+*.pem
+*.key
+secrets/
+ansible/group_vars/vault.yml
+*.vault
+
+# Test credential files / one-off login helpers — never commit real creds
+login.json
+login*.json
+test-token.txt
+*.token

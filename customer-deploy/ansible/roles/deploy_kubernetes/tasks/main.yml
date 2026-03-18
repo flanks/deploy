@@ -1,0 +1,123 @@
+---
+# Deploy Kubernetes role — Full K8s deployment with Helm-style manifests
+
+# ── Phase 0: Verify Cluster Access ──────────────────────────────────────────
+- name: Verify kubectl access
+  ansible.builtin.command:
+    cmd: "kubectl --kubeconfig={{ kubeconfig_path }} --context={{ k8s_context }} cluster-info"
+  register: cluster_info
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+- name: Display cluster info
+  ansible.builtin.debug:
+    msg: "{{ cluster_info.stdout_lines[:3] }}"
+
+# ── Phase 1: Create Namespaces ──────────────────────────────────────────────
+- name: Apply namespace manifest
+  ansible.builtin.command:
+    cmd: "kubectl --kubeconfig={{ kubeconfig_path }} --context={{ k8s_context }} apply -f {{ eurion_root }}/k8s/base/namespaces.yml"
+  register: ns_result
+  changed_when: "'created' in ns_result.stdout"
+  delegate_to: localhost
+  become: false
+
+# ── Phase 2: Deploy Secrets ─────────────────────────────────────────────────
+- name: Apply secrets
+  ansible.builtin.command:
+    cmd: "kubectl --kubeconfig={{ kubeconfig_path }} --context={{ k8s_context }} apply -f {{ eurion_root }}/k8s/secrets/secrets.yml"
+  register: secrets_result
+  changed_when: "'created' in secrets_result.stdout or 'configured' in secrets_result.stdout"
+  delegate_to: localhost
+  become: false
+
+# ── Phase 3: Deploy Infrastructure ──────────────────────────────────────────
+- name: Install PostgreSQL via Helm (CloudNativePG)
+  ansible.builtin.command:
+    cmd: >
+      helm --kubeconfig={{ kubeconfig_path }} --kube-context={{ k8s_context }}
+      upgrade --install eurion-postgres cnpg/cluster
+      --namespace {{ k8s_namespace_prefix }}-infra
+      --create-namespace
+      --set cluster.instances=3
+      --set cluster.postgresql.parameters.shared_buffers={{ pg_shared_buffers }}
+      --set cluster.postgresql.parameters.max_connections={{ pg_max_connections }}
+      --set cluster.storage.size=50Gi
+      --set cluster.superuserSecret.name=eurion-postgres-credentials
+      --wait --timeout=5m
+  when: not (has_external_pg | default(false) | bool)
+  register: pg_helm
+  changed_when: "'STATUS: deployed' in pg_helm.stdout"
+  delegate_to: localhost
+  become: false
+  failed_when: false
+
+- name: Install Redis via Helm
+  ansible.builtin.command:
+    cmd: >
+      helm --kubeconfig={{ kubeconfig_path }} --kube-context={{ k8s_context }}
+      upgrade --install eurion-redis bitnami/redis
+      --namespace {{ k8s_namespace_prefix }}-infra
+      --create-namespace
+      --set auth.password={{ redis_password }}
+      --set architecture=standalone
+      --set master.persistence.size=10Gi
+      --set master.resources.limits.memory={{ redis_maxmemory }}
+      --wait --timeout=5m
+  when: not (has_external_redis | default(false) | bool)
+  register: redis_helm
+  changed_when: "'STATUS: deployed' in redis_helm.stdout"
+  delegate_to: localhost
+  become: false
+  failed_when: false
+
+- name: Install Kafka via Helm (Strimzi)
+  ansible.builtin.command:
+    cmd: >
+      helm --kubeconfig={{ kubeconfig_path }} --kube-context={{ k8s_context }}
+      upgrade --install eurion-kafka strimzi/strimzi-kafka-operator
+      --namespace {{ k8s_namespace_prefix }}-infra
+      --create-namespace
+      --wait --timeout=5m
+  register: kafka_helm
+  changed_when: "'STATUS: deployed' in kafka_helm.stdout"
+  delegate_to: localhost
+  become: false
+  failed_when: false
+
+# ── Phase 4: Deploy Services ────────────────────────────────────────────────
+- name: Apply service deployments
+  ansible.builtin.command:
+    cmd: "kubectl --kubeconfig={{ kubeconfig_path }} --context={{ k8s_context }} apply -f {{ eurion_root }}/k8s/services/{{ item.name }}.yml"
+  register: svc_result
+  changed_when: "'created' in svc_result.stdout or 'configured' in svc_result.stdout"
+  loop: "{{ services }}"
+  when: item.required | string | lower in ['true', 'yes']
+  delegate_to: localhost
+  become: false
+
+# ── Phase 5: Deploy Ingress ─────────────────────────────────────────────────
+- name: Apply ingress manifest
+  ansible.builtin.command:
+    cmd: "kubectl --kubeconfig={{ kubeconfig_path }} --context={{ k8s_context }} apply -f {{ eurion_root }}/k8s/base/ingress.yml"
+  register: ingress_result
+  changed_when: "'created' in ingress_result.stdout or 'configured' in ingress_result.stdout"
+  delegate_to: localhost
+  become: false
+
+# ── Phase 6: Wait for Rollout ───────────────────────────────────────────────
+- name: Wait for service rollouts
+  ansible.builtin.command:
+    cmd: >
+      kubectl --kubeconfig={{ kubeconfig_path }} --context={{ k8s_context }}
+      rollout status deployment/eurion-{{ item.name }}
+      --namespace {{ k8s_namespace_prefix }}-{{ item.name | regex_replace('-service$', '') }}
+      --timeout=300s
+  register: rollout_result
+  loop: "{{ services }}"
+  when: item.required | string | lower in ['true', 'yes']
+  delegate_to: localhost
+  become: false
+  failed_when: false
+  changed_when: false

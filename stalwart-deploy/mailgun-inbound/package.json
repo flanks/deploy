@@ -1,0 +1,10 @@
+{
+  "name": "mailgun-inbound-relay",
+  "version": "1.0.0",
+  "description": "Receives Mailgun inbound webhooks and injects mail into Stalwart via SMTP",
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "busboy": "^1.6.0"
+  }
+}

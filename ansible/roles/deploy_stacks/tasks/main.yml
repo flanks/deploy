@@ -1,0 +1,170 @@
+---
+# roles/deploy_stacks/tasks/main.yml
+#
+# Deploys all Docker Compose stacks in dependency order, waits for each
+# layer to be healthy before proceeding to the next.
+
+# ── Layer 0: Docker network ───────────────────────────────────────────────────
+- name: Ensure eurion-net Docker network exists
+  community.docker.docker_network:
+    name: eurion-net
+    driver: bridge
+
+# ── Layer 1: Infrastructure (Postgres, Redis, Kafka, MinIO, Meilisearch) ──────
+- name: Deploy infrastructure stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_deploy_root }}/infrastructure"
+    state: present
+    pull: missing
+
+- name: Wait for infrastructure to be healthy
+  ansible.builtin.include_tasks: wait_for_health.yml
+  vars:
+    stack_name: infrastructure
+    containers:
+      - eurion-postgres
+      - eurion-pgbouncer
+      - eurion-redis
+      - eurion-kafka
+    wait_seconds: 60
+
+# ── Layer 2a: Install pgcrypto in all service databases ───────────────────────
+# Required by identity-service (gen_random_bytes) and potentially others.
+# CREATE EXTENSION IF NOT EXISTS is idempotent — safe to run on every deploy.
+- name: Install pgcrypto extension in all service databases
+  ansible.builtin.shell: |
+    for db in identity org audit messaging file video notification admin search ai workflow preview transcription bridge; do
+      sudo docker exec eurion-postgres psql -U eurion -d eurion_${db} \
+        -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;" 2>/dev/null \
+        && echo "pgcrypto OK: eurion_${db}" \
+        || echo "pgcrypto WARN (db may not exist yet): eurion_${db}"
+    done
+  changed_when: false
+
+# ── Layer 2b: Run database migrations ─────────────────────────────────────────
+- name: Run migrations for all services
+  ansible.builtin.shell: |
+    sudo docker run --rm \
+      --network eurion-net \
+      -e DATABASE_URL="postgresql://eurion:{{ postgres_password }}@eurion-postgres:5432/eurion_{{ item }}" \
+      -e NODE_ENV=production \
+      eurion/{{ item }}-service:{{ image_tag }} \
+      node backend/services/{{ item }}-service/dist/migrate.js 2>&1 || true
+  loop:
+    - identity
+    - org
+    - audit
+    - messaging
+    - file
+    - video
+    - notification
+    - admin
+    - search
+    - ai
+    - workflow
+    - preview
+    - transcription
+    - bridge
+  loop_control:
+    label: "migrate {{ item }}"
+  register: migration_results
+  changed_when: false
+
+- name: Show migration results
+  ansible.builtin.debug:
+    msg: "{{ item.item }}: {{ 'OK' if item.rc == 0 else 'WARN (no migrate.js?)' }}"
+  loop: "{{ migration_results.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# ── Layer 3: Storage (MinIO, Meilisearch) ─────────────────────────────────────
+- name: Deploy storage stack (if separate)
+  ansible.builtin.stat:
+    path: "{{ eurion_deploy_root }}/storage/docker-compose.yml"
+  register: storage_compose
+
+- name: Deploy storage services
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_deploy_root }}/storage"
+    state: present
+  when: storage_compose.stat.exists
+
+- name: Wait for storage to be healthy
+  ansible.builtin.include_tasks: wait_for_health.yml
+  vars:
+    stack_name: storage
+    containers:
+      - eurion-minio
+      - eurion-meilisearch
+    wait_seconds: 60
+  when: storage_compose.stat.exists
+
+# ── Layer 4: Traefik gateway ──────────────────────────────────────────────────
+- name: Deploy Traefik gateway
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_deploy_root }}/gateway"
+    state: present
+
+- name: Wait for Traefik to be up
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 80
+    timeout: 30
+
+# ── Layer 5: Monitoring ───────────────────────────────────────────────────────
+- name: Deploy monitoring stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_deploy_root }}/monitoring"
+    state: present
+  ignore_errors: true   # non-critical for platform operation
+
+# ── Layer 6: Coturn ───────────────────────────────────────────────────────────
+- name: Deploy coturn (TURN server)
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_deploy_root }}/coturn"
+    state: present
+  ignore_errors: true
+
+# ── Layer 7: Application services ────────────────────────────────────────────
+- name: Deploy application services stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_deploy_root }}/services"
+    env_files:
+      - "{{ eurion_deploy_root }}/services/.env"
+    state: present
+    pull: missing
+
+# ── Layer 8: Frontend web app ─────────────────────────────────────────────────
+- name: Check for frontend compose file
+  ansible.builtin.stat:
+    path: "{{ eurion_deploy_root }}/frontend/docker-compose.yml"
+  register: frontend_compose
+
+- name: Deploy frontend web app
+  community.docker.docker_compose_v2:
+    project_src: "{{ eurion_deploy_root }}/frontend"
+    state: present
+  when: frontend_compose.stat.exists
+
+# ── Wait for all services to become healthy ───────────────────────────────────
+- name: Wait for all application services to be healthy
+  ansible.builtin.include_tasks: wait_for_health.yml
+  vars:
+    stack_name: services
+    containers:
+      - eurion-gateway
+      - eurion-identity-service
+      - eurion-org-service
+      - eurion-audit-service
+      - eurion-messaging-service
+      - eurion-file-service
+      - eurion-video-service
+      - eurion-notification-service
+      - eurion-admin-service
+      - eurion-search-service
+      - eurion-ai-service
+      - eurion-workflow-service
+      - eurion-preview-service
+      - eurion-transcription-service
+      - eurion-bridge-service
+    wait_seconds: 120

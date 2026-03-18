@@ -1,0 +1,101 @@
+---
+# EURION — Upgrade Playbook
+# Upgrades the Eurion platform to a new version
+#
+# Usage:
+#   ansible-playbook upgrade.yml -e @vars.yml -e @secrets.yml \
+#     -e eurion_version=1.2.0 --ask-vault-pass
+
+- name: "Eurion Platform — Upgrade"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    eurion_version: "{{ eurion_version | default('latest') }}"
+
+  pre_tasks:
+    - name: Validate version is specified
+      ansible.builtin.assert:
+        that:
+          - eurion_version != 'latest'
+        fail_msg: "Please specify a version: -e eurion_version=X.Y.Z"
+
+    - name: Display upgrade info
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════╗
+          ║  EURION Platform Upgrade                         ║
+          ║  Target version: {{ eurion_version }}
+          ║  Organization:   {{ org_name }}
+          ║  Domain:         {{ domain }}
+          ╚══════════════════════════════════════════════════╝
+
+  tasks:
+    # ── Pre-upgrade backup ─────────────────────────────────────────────────
+    - name: Run pre-upgrade backup
+      ansible.builtin.command:
+        cmd: "{{ eurion_root }}/config/backup.sh"
+      register: backup_result
+      changed_when: "'Backup complete' in backup_result.stdout"
+      when: deploy_mode in ['docker', 'airgapped']
+
+    # ── Pull new images (Docker) ───────────────────────────────────────────
+    - name: Pull updated service images
+      community.docker.docker_image:
+        name: "eurion-{{ item.name }}:{{ eurion_version }}"
+        source: pull
+      loop: "{{ services }}"
+      when:
+        - deploy_mode in ['docker', 'airgapped']
+        - item.required | string | lower in ['true', 'yes']
+      failed_when: false
+
+    # ── Rolling restart services ───────────────────────────────────────────
+    - name: Update services compose with new version
+      ansible.builtin.template:
+        src: "roles/configure/templates/docker/services.yml.j2"
+        dest: "{{ eurion_root }}/compose/services.yml"
+        mode: '0640'
+      when: deploy_mode in ['docker', 'airgapped']
+
+    - name: Recreate services with new version
+      community.docker.docker_compose_v2:
+        project_src: "{{ eurion_root }}/compose"
+        files:
+          - services.yml
+        env_files:
+          - .env
+        state: present
+        recreate: always
+      when: deploy_mode in ['docker', 'airgapped']
+
+    # ── Run migrations ─────────────────────────────────────────────────────
+    - name: Run database migrations
+      ansible.builtin.command:
+        cmd: "docker exec eurion-{{ item.name }} node dist/migrate.js"
+      register: migration_result
+      changed_when: "'Applied migration' in migration_result.stdout"
+      failed_when: false
+      loop: "{{ services }}"
+      when:
+        - deploy_mode in ['docker', 'airgapped']
+        - item.name != 'gateway'
+        - item.required | string | lower in ['true', 'yes']
+        - item.db != 'postgres'
+
+    # ── Verify ─────────────────────────────────────────────────────────────
+    - name: Verify services are healthy
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item.port }}/health"
+        status_code: 200
+      register: health_check
+      retries: 30
+      delay: 10
+      until: health_check.status == 200
+      loop: "{{ services }}"
+      when: item.required | string | lower in ['true', 'yes']
+
+    - name: Upgrade complete
+      ansible.builtin.debug:
+        msg: "✓ Eurion upgraded to version {{ eurion_version }}"

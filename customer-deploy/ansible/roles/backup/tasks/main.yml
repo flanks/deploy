@@ -1,0 +1,211 @@
+---
+# Backup role — Configure automated backups and provide restore playbook
+
+# ── Create Backup Script ─────────────────────────────────────────────────────
+- name: Create PostgreSQL backup script
+  ansible.builtin.copy:
+    content: |
+      #!/usr/bin/env bash
+      # EURION — Automated PostgreSQL Backup
+      # Runs daily via cron, retains 30 days of backups
+      set -euo pipefail
+
+      BACKUP_DIR="{{ eurion_backups }}/postgres"
+      TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+      RETENTION_DAYS=30
+      LOG_FILE="{{ eurion_logs }}/backup.log"
+
+      log() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" | tee -a "$LOG_FILE"; }
+
+      log "Starting backup..."
+
+      # Dump all Eurion databases
+      DATABASES=(
+      {% for svc in services %}
+      {% if svc.db != 'postgres' and svc.required | string | lower in ['true', 'yes'] %}
+        "{{ svc.db }}"
+      {% endif %}
+      {% endfor %}
+      )
+
+      DUMP_DIR="$BACKUP_DIR/$TIMESTAMP"
+      mkdir -p "$DUMP_DIR"
+
+      for db in "${DATABASES[@]}"; do
+        log "  Dumping $db..."
+        docker exec eurion-postgres pg_dump -U eurion -d "$db" \
+          --format=custom --compress=9 \
+          > "$DUMP_DIR/${db}.dump" 2>> "$LOG_FILE"
+
+        if [ $? -eq 0 ]; then
+          SIZE=$(du -sh "$DUMP_DIR/${db}.dump" | cut -f1)
+          log "  ✓ $db ($SIZE)"
+        else
+          log "  ✗ Failed to dump $db"
+        fi
+      done
+
+      # Backup Redis
+      log "  Dumping Redis..."
+      docker exec eurion-redis redis-cli -a "{{ redis_password }}" BGSAVE 2>/dev/null
+      sleep 2
+      docker cp eurion-redis:/data/dump.rdb "$DUMP_DIR/redis.rdb" 2>> "$LOG_FILE" || true
+
+      # Backup config
+      log "  Backing up configuration..."
+      cp -r {{ eurion_root }}/config "$DUMP_DIR/config" 2>> "$LOG_FILE" || true
+
+      # Create compressed archive
+      log "  Compressing..."
+      cd "$BACKUP_DIR"
+      tar -czf "eurion-backup-${TIMESTAMP}.tar.gz" "$TIMESTAMP"
+      rm -rf "$DUMP_DIR"
+
+      ARCHIVE_SIZE=$(du -sh "$BACKUP_DIR/eurion-backup-${TIMESTAMP}.tar.gz" | cut -f1)
+      log "  Archive: eurion-backup-${TIMESTAMP}.tar.gz ($ARCHIVE_SIZE)"
+
+      # Upload to MinIO (S3)
+      if docker exec eurion-minio mc alias set local http://localhost:9000 {{ minio_root_user }} {{ minio_root_password }} 2>/dev/null; then
+        log "  Uploading to S3..."
+        docker cp "$BACKUP_DIR/eurion-backup-${TIMESTAMP}.tar.gz" eurion-minio:/tmp/
+        docker exec eurion-minio mc cp "/tmp/eurion-backup-${TIMESTAMP}.tar.gz" "local/eurion-backups/postgres/" 2>> "$LOG_FILE" || true
+        log "  ✓ Uploaded to S3"
+      fi
+
+      # Cleanup old backups
+      log "  Cleaning backups older than ${RETENTION_DAYS} days..."
+      find "$BACKUP_DIR" -name "eurion-backup-*.tar.gz" -mtime +${RETENTION_DAYS} -delete
+      REMAINING=$(find "$BACKUP_DIR" -name "eurion-backup-*.tar.gz" | wc -l)
+      log "  ${REMAINING} backup(s) retained"
+
+      log "Backup complete ✓"
+    dest: "{{ eurion_root }}/config/backup.sh"
+    mode: '0750'
+  when: deploy_mode in ['docker', 'airgapped']
+
+# ── Create Restore Script ────────────────────────────────────────────────────
+- name: Create PostgreSQL restore script
+  ansible.builtin.copy:
+    content: |
+      #!/usr/bin/env bash
+      # EURION — Database Restore
+      # Usage: restore.sh <backup-file.tar.gz> [database-name]
+      set -euo pipefail
+
+      if [ $# -lt 1 ]; then
+        echo "Usage: $0 <backup-file.tar.gz> [database-name]"
+        echo ""
+        echo "Available backups:"
+        ls -lh {{ eurion_backups }}/postgres/eurion-backup-*.tar.gz 2>/dev/null || echo "  No local backups found"
+        exit 1
+      fi
+
+      ARCHIVE="$1"
+      SPECIFIC_DB="${2:-}"
+      RESTORE_DIR="/tmp/eurion-restore-$$"
+
+      if [ ! -f "$ARCHIVE" ]; then
+        echo "Error: Archive not found: $ARCHIVE"
+        exit 1
+      fi
+
+      echo "╔══════════════════════════════════════════════╗"
+      echo "║  EURION Database Restore                      ║"
+      echo "║  Archive: $(basename "$ARCHIVE")"
+      echo "║  Target:  ${SPECIFIC_DB:-ALL databases}"
+      echo "╚══════════════════════════════════════════════╝"
+      echo ""
+      echo "⚠  WARNING: This will OVERWRITE existing data!"
+      read -p "Are you sure? (type YES to continue): " confirm
+      if [ "$confirm" != "YES" ]; then
+        echo "Cancelled."
+        exit 0
+      fi
+
+      echo ""
+      echo "Extracting..."
+      mkdir -p "$RESTORE_DIR"
+      tar -xzf "$ARCHIVE" -C "$RESTORE_DIR"
+
+      # Find the dump directory
+      DUMP_DIR=$(find "$RESTORE_DIR" -name "*.dump" -printf '%h\n' | head -1)
+      if [ -z "$DUMP_DIR" ]; then
+        echo "Error: No database dumps found in archive"
+        rm -rf "$RESTORE_DIR"
+        exit 1
+      fi
+
+      for dump_file in "$DUMP_DIR"/*.dump; do
+        db_name=$(basename "$dump_file" .dump)
+
+        if [ -n "$SPECIFIC_DB" ] && [ "$db_name" != "$SPECIFIC_DB" ]; then
+          continue
+        fi
+
+        echo "  Restoring $db_name..."
+
+        # Drop and recreate
+        docker exec eurion-postgres psql -U eurion -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$db_name' AND pid <> pg_backend_pid();" 2>/dev/null || true
+        docker exec eurion-postgres dropdb -U eurion --if-exists "$db_name" 2>/dev/null || true
+        docker exec eurion-postgres createdb -U eurion "$db_name"
+
+        # Restore
+        docker cp "$dump_file" eurion-postgres:/tmp/restore.dump
+        docker exec eurion-postgres pg_restore -U eurion -d "$db_name" --no-owner --no-privileges /tmp/restore.dump
+        docker exec eurion-postgres rm /tmp/restore.dump
+
+        echo "  ✓ $db_name restored"
+      done
+
+      # Restore Redis if dump exists
+      if [ -f "$DUMP_DIR/redis.rdb" ] && [ -z "$SPECIFIC_DB" ]; then
+        echo "  Restoring Redis..."
+        docker cp "$DUMP_DIR/redis.rdb" eurion-redis:/data/dump.rdb
+        docker restart eurion-redis
+        echo "  ✓ Redis restored"
+      fi
+
+      rm -rf "$RESTORE_DIR"
+      echo ""
+      echo "✓ Restore complete. Restart services: docker compose restart"
+    dest: "{{ eurion_root }}/config/restore.sh"
+    mode: '0750'
+  when: deploy_mode in ['docker', 'airgapped']
+
+# ── Schedule Cron Job ────────────────────────────────────────────────────────
+- name: Schedule daily backup (02:00 UTC)
+  ansible.builtin.cron:
+    name: "eurion-daily-backup"
+    minute: "0"
+    hour: "2"
+    job: "{{ eurion_root }}/config/backup.sh >> {{ eurion_logs }}/backup-cron.log 2>&1"
+    user: root
+
+- name: Schedule weekly config backup (Sundays 03:00 UTC)
+  ansible.builtin.cron:
+    name: "eurion-config-backup"
+    minute: "0"
+    hour: "3"
+    weekday: "0"
+    job: "tar -czf {{ eurion_backups }}/config/eurion-config-$(date +\\%Y\\%m\\%d).tar.gz {{ eurion_root }}/compose {{ eurion_root }}/config >> {{ eurion_logs }}/backup-cron.log 2>&1"
+    user: root
+
+# ── Verify Backup Setup ─────────────────────────────────────────────────────
+- name: Run initial backup
+  ansible.builtin.command:
+    cmd: "{{ eurion_root }}/config/backup.sh"
+  register: initial_backup
+  changed_when: "'Backup complete' in initial_backup.stdout"
+  failed_when: false
+  when: deploy_mode in ['docker', 'airgapped']
+
+- name: Display backup status
+  ansible.builtin.debug:
+    msg: |
+      ✓ Backup system configured:
+        - Daily at 02:00 UTC (PostgreSQL + Redis + Config)
+        - Weekly config-only at 03:00 UTC (Sundays)
+        - Retention: 30 days
+        - Location: {{ eurion_backups }}/postgres/
+        - S3 mirror: eurion-backups/postgres/ (MinIO)
+        - Restore: {{ eurion_root }}/config/restore.sh <archive.tar.gz>

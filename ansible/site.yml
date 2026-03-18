@@ -1,0 +1,78 @@
+---
+# site.yml — Full EURION platform deployment playbook
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml site.yml
+#
+# Tags:
+#   --tags patch      — only apply source fixes
+#   --tags build      — only build Docker images
+#   --tags deploy     — only deploy stacks
+#   --tags verify     — only verify health
+#   --tags redeploy   — patch + build + deploy (skip initial infra setup)
+#
+# Skip tags:
+#   --skip-tags build — deploy without rebuilding images (use cached)
+
+- name: EURION Platform Deployment
+  hosts: eurion-vm
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify target OS
+      ansible.builtin.assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: "Expected Debian/Ubuntu on target VM"
+
+    - name: Ensure Docker is installed
+      ansible.builtin.command: docker --version
+      register: docker_check
+      changed_when: false
+      failed_when: docker_check.rc != 0
+
+    - name: Ensure Docker Compose v2 is installed
+      ansible.builtin.command: docker compose version
+      register: compose_check
+      changed_when: false
+      failed_when: compose_check.rc != 0
+
+    - name: Show Docker versions
+      ansible.builtin.debug:
+        msg:
+          - "{{ docker_check.stdout }}"
+          - "{{ compose_check.stdout }}"
+
+    - name: Ensure source directory exists on VM
+      ansible.builtin.stat:
+        path: "{{ eurion_source_remote }}/package.json"
+      register: source_check
+      failed_when: not source_check.stat.exists
+
+  roles:
+    # 1. Apply all known source patches before building
+    - role: patch_source
+      tags: [patch, build, redeploy]
+
+    # 2. Build all Docker images (parallel batches)
+    - role: build_images
+      tags: [build, redeploy]
+
+    # 3. Deploy all compose stacks in order
+    - role: deploy_stacks
+      tags: [deploy, redeploy]
+
+    # 4. Verify platform health end-to-end
+    - role: verify
+      tags: [verify, redeploy]
+
+  post_tasks:
+    - name: Platform deployment complete
+      ansible.builtin.debug:
+        msg:
+          - "╔══════════════════════════════════════════╗"
+          - "║  EURION is deployed and verified         ║"
+          - "║  API:   https://api.{{ domain }}         ║"
+          - "║  App:   https://app.{{ domain }}         ║"
+          - "║  Admin: https://traefik.{{ domain }}     ║"
+          - "╚══════════════════════════════════════════╝"
+      tags: always

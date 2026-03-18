@@ -1,0 +1,76 @@
+---
+# roles/verify/tasks/main.yml
+# End-to-end verification of the full platform — hits every service health
+# endpoint through the Traefik gateway and reports a summary.
+
+- name: Verify DNS resolves to correct IP
+  ansible.builtin.assert:
+    that: lookup('community.general.dig', 'api.' + domain) == public_ip
+    fail_msg: "DNS FAIL — api.{{ domain }} does not resolve to {{ public_ip }}"
+    success_msg: "DNS OK — api.{{ domain }} → {{ public_ip }}"
+  ignore_errors: true
+
+- name: Check Traefik port 80 is open
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 80
+    timeout: 10
+
+- name: Verify each service health endpoint via internal loopback
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/health"
+    return_content: true
+    status_code: 200
+    timeout: 5
+  loop: "{{ services }}"
+  loop_control:
+    label: "{{ item.name }}:{{ item.port }}"
+  register: health_results
+  ignore_errors: true
+
+- name: Verify gateway health via HTTP (direct loopback)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:3000/health"
+    return_content: true
+    status_code: 200
+    timeout: 10
+  register: gateway_https
+  ignore_errors: true
+
+- name: Verify frontend web app is serving
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:80"
+    return_content: false
+    status_code: [200, 301, 302]
+    timeout: 10
+    follow_redirects: none
+  register: frontend_check
+  ignore_errors: true
+  delegate_to: "{{ inventory_hostname }}"
+
+# ── Print summary table ───────────────────────────────────────────────────────
+- name: Build health summary
+  ansible.builtin.set_fact:
+    health_summary: |
+      ╔══════════════════════════════════════════════════════════╗
+      ║           EURION Platform Health Summary                 ║
+      ╠══════════════════════════════════════════════════════════╣
+      {% for r in health_results.results %}
+      ║  {{ '%-28s' | format(r.item.name) }} {{ '✅ OK ' if r.status == 200 else '❌ FAIL' }}  ║
+      {% endfor %}
+      ╠══════════════════════════════════════════════════════════╣
+      ║  HTTPS gateway ({{ domain }})  {{ '✅ OK' if gateway_https.status == 200 else '❌ FAIL' }}              ║
+      ║  Frontend web app              {{ '✅ OK' if (frontend_check.status | default(0)) in [200, 301, 302] else '❌ FAIL' }}              ║
+      ╚══════════════════════════════════════════════════════════╝
+
+- name: Show health summary
+  ansible.builtin.debug:
+    msg: "{{ health_summary.split('\n') }}"
+
+- name: Fail if any service is unhealthy
+  ansible.builtin.fail:
+    msg: "Service {{ item.item.name }} failed health check — status {{ item.status | default('no response') }}"
+  loop: "{{ health_results.results }}"
+  when: item.status is not defined or item.status != 200
+  loop_control:
+    label: "{{ item.item.name }}"

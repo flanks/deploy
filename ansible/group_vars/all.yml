@@ -1,0 +1,96 @@
+# ── VM / networking ───────────────────────────────────────────────────────────
+# Override these in your inventory or host_vars for each environment.
+eurion_source_local: ""                     # e.g. C:/Users/you/Desktop/Eurion/eu-teams
+eurion_source_remote: /opt/eurion/source
+eurion_deploy_root: /opt/eurion
+public_ip: "YOUR_VM_IP"                      # e.g. 192.168.1.13 or your public IP
+domain: "example.com"                        # e.g. eurion.se — your production domain
+
+# ── Docker image registry (local — no push needed) ────────────────────────────
+image_tag: latest
+
+services:
+  - name: gateway
+    context: backend/gateway
+    port: 3000
+    health_path: /health
+  - name: identity-service
+    context: backend/services/identity-service
+    port: 3001
+    health_path: /health
+  - name: org-service
+    context: backend/services/org-service
+    port: 3002
+    health_path: /health
+  - name: audit-service
+    context: backend/services/audit-service
+    port: 3003
+    health_path: /health
+  - name: messaging-service
+    context: backend/services/messaging-service
+    port: 3004
+    health_path: /health
+  - name: file-service
+    context: backend/services/file-service
+    port: 3005
+    health_path: /health
+  - name: video-service
+    context: backend/services/video-service
+    port: 3006
+    health_path: /health
+  - name: notification-service
+    context: backend/services/notification-service
+    port: 3007
+    health_path: /health
+  - name: admin-service
+    context: backend/services/admin-service
+    port: 3008
+    health_path: /health
+  - name: search-service
+    context: backend/services/search-service
+    port: 3009
+    health_path: /health
+  - name: ai-service
+    context: backend/services/ai-service
+    port: 3010
+    health_path: /health
+  - name: workflow-service
+    context: backend/services/workflow-service
+    port: 3011
+    health_path: /health
+  - name: preview-service
+    context: backend/services/preview-service
+    port: 3012
+    health_path: /health
+  - name: transcription-service
+    context: backend/services/transcription-service
+    port: 3013
+    health_path: /health
+  - name: bridge-service
+    context: backend/services/bridge-service
+    port: 3014
+    health_path: /health
+
+# ── Credentials ───────────────────────────────────────────────────────────────
+# These are loaded from ansible/group_vars/vault.yml (ansible-vault encrypted).
+# To create/edit:  ansible-vault edit ansible/group_vars/vault.yml
+# To run playbook: ansible-playbook site.yml --ask-vault-pass
+#
+# Required vault variables:
+#   vault_postgres_password
+#   vault_redis_password
+#   vault_minio_password
+#   vault_meilisearch_key       (min 16 bytes for Meilisearch production mode)
+#   vault_jwt_secret
+#   vault_internal_api_key
+#   vault_turn_secret
+#   vault_grafana_password
+#
+postgres_password: "{{ vault_postgres_password }}"
+redis_password: "{{ vault_redis_password }}"
+minio_password: "{{ vault_minio_password }}"
+meilisearch_key: "{{ vault_meilisearch_key }}"
+jwt_secret: "{{ vault_jwt_secret }}"
+internal_api_key: "{{ vault_internal_api_key }}"
+turn_secret: "{{ vault_turn_secret }}"
+grafana_password: "{{ vault_grafana_password }}"

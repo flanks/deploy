@@ -1,0 +1,87 @@
+---
+# EURION — Health Check Playbook
+# Quick health verification without deploying anything
+#
+# Usage:
+#   ansible-playbook healthcheck.yml -e @vars.yml -e @secrets.yml --ask-vault-pass
+
+- name: "Eurion Platform — Health Check"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    # ── System Resources ─────────────────────────────────────────────────────
+    - name: Check disk space
+      ansible.builtin.command: df -h /
+      register: disk_space
+      changed_when: false
+
+    - name: Check memory usage
+      ansible.builtin.command: free -h
+      register: memory_usage
+      changed_when: false
+
+    - name: Check Docker status
+      ansible.builtin.command: docker info --format "{% raw %}{{.ContainersRunning}} running, {{.ContainersStopped}} stopped{% endraw %}"
+      register: docker_status
+      changed_when: false
+      when: deploy_mode in ['docker', 'airgapped']
+
+    # ── Container Status ─────────────────────────────────────────────────────
+    - name: List all Eurion containers
+      ansible.builtin.command: docker ps --filter "name=eurion-" --format "{% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
+      register: containers
+      changed_when: false
+      when: deploy_mode in ['docker', 'airgapped']
+
+    # ── Service Health ───────────────────────────────────────────────────────
+    - name: Health check all services
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item.port }}/health"
+        method: GET
+        timeout: 10
+        status_code: 200
+      register: health_results
+      loop: "{{ services }}"
+      when: item.required | string | lower in ['true', 'yes']
+      failed_when: false
+
+    # ── Display Results ──────────────────────────────────────────────────────
+    - name: Display system health
+      ansible.builtin.debug:
+        msg: |
+          ═══════════════════════════════════════════════════
+            EURION Health Report — {{ ansible_date_time.iso8601 }}
+          ═══════════════════════════════════════════════════
+
+          SYSTEM:
+          {{ disk_space.stdout }}
+
+          MEMORY:
+          {{ memory_usage.stdout }}
+
+          DOCKER: {{ docker_status.stdout | default('N/A') }}
+
+          CONTAINERS:
+          {{ containers.stdout | default('N/A') }}
+
+          SERVICES:
+          {% for result in health_results.results | default([]) %}
+          {% if result.item is defined %}
+            {{ '✓' if (result.status | default(0)) == 200 else '✗' }} {{ result.item.name }}:{{ result.item.port }} — {{ 'OK' if (result.status | default(0)) == 200 else 'FAIL' }}
+          {% endif %}
+          {% endfor %}
+
+    # ── Backup Status ────────────────────────────────────────────────────────
+    - name: Check last backup
+      ansible.builtin.command: ls -lt {{ eurion_backups }}/postgres/ --time-style=long-iso
+      register: backup_list
+      changed_when: false
+      failed_when: false
+
+    - name: Display backup status
+      ansible.builtin.debug:
+        msg: |
+          BACKUPS:
+          {{ backup_list.stdout | default('No backups found') }}

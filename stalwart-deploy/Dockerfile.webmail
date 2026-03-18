@@ -1,0 +1,43 @@
+FROM roundcube/roundcubemail:latest
+
+# Install calendar plugin dependencies and tools
+RUN apt-get update && apt-get install -y --no-install-recommends sqlite3 unzip git && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/roundcubemail
+
+# Download calendar plugin and its dependencies directly (avoid plugin-installer DB init)
+RUN mkdir -p plugins/calendar plugins/libcalendaring plugins/libkolab \
+    && curl -sL https://github.com/cociweb/calendar/archive/refs/heads/master.tar.gz | tar xz -C plugins/calendar --strip-components=1 \
+    && curl -sL https://github.com/cociweb/libcalendaring/archive/refs/heads/master.tar.gz | tar xz -C plugins/libcalendaring --strip-components=1 \
+    && curl -sL https://github.com/texxasrulez/libkolab/archive/refs/heads/master.tar.gz | tar xz -C plugins/libkolab --strip-components=1
+
+# Install PHP library dependencies via composer (sabre/dav for CalDAV)
+RUN COMPOSER_ALLOW_SUPERUSER=1 composer require --no-interaction --no-progress --no-scripts --no-plugins \
+    "sabre/dav:^4.7" "sabre/vobject:^4.5" "sabre/http:^5.1" "sabre/uri:^2.3" "sabre/xml:^2.2" "sabre/event:^5.1"
+
+# Fix PHP 8 incompatibilities in calendar plugin
+COPY fix-calendar-php.sh /tmp/fix-calendar-php.sh
+RUN chmod +x /tmp/fix-calendar-php.sh && /tmp/fix-calendar-php.sh && rm /tmp/fix-calendar-php.sh
+
+# Copy SQLite schema fix (proper syntax without MySQL INDEX-in-CREATE-TABLE)
+COPY caldav_schema.sql /usr/src/roundcubemail/plugins/calendar/SQL/sqlite_fixed.sql
+
+# Copy calendar plugin configuration
+COPY webmail-calendar-config.inc.php plugins/calendar/config.inc.php
+
+# Install custom Eurion calendar driver (syncs with Eurion app API)
+RUN mkdir -p plugins/calendar/drivers/eurion
+COPY eurion_driver.php plugins/calendar/drivers/eurion/eurion_driver.php
+
+# Fix ownership
+RUN chown -R www-data:www-data plugins/calendar plugins/libcalendaring plugins/libkolab 2>/dev/null || true
+
+# Add a startup task that syncs calendar plugin and initializes DB tables
+# Roundcube entrypoint runs /entrypoint-tasks/post-setup/* scripts after file copy
+RUN mkdir -p /entrypoint-tasks/post-setup
+COPY webmail-entrypoint.sh /entrypoint-tasks/post-setup/10-calendar-init.sh
+RUN chmod +x /entrypoint-tasks/post-setup/10-calendar-init.sh
+
+# Use original entrypoint and CMD
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["apache2-foreground"]

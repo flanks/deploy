@@ -1,0 +1,40 @@
+---
+# roles/build_images/vars/main.yml
+# Split builds into 2 batches — batch 1 can all run in parallel.
+# batch 2 uses @eurion/shared which must be built into node_modules first
+# (the builder stage does this via npm ci, so actually all can be parallel).
+# Keeping 2 batches just for log clarity.
+
+build_batch_1:
+  - name: gateway
+    dockerfile: backend/gateway/Dockerfile
+  - name: identity-service
+    dockerfile: backend/services/identity-service/Dockerfile
+  - name: org-service
+    dockerfile: backend/services/org-service/Dockerfile
+  - name: audit-service
+    dockerfile: backend/services/audit-service/Dockerfile
+  - name: messaging-service
+    dockerfile: backend/services/messaging-service/Dockerfile
+  - name: file-service
+    dockerfile: backend/services/file-service/Dockerfile
+  - name: notification-service
+    dockerfile: backend/services/notification-service/Dockerfile
+
+build_batch_2:
+  - name: video-service
+    dockerfile: backend/services/video-service/Dockerfile
+  - name: admin-service
+    dockerfile: backend/services/admin-service/Dockerfile
+  - name: search-service
+    dockerfile: backend/services/search-service/Dockerfile
+  - name: ai-service
+    dockerfile: backend/services/ai-service/Dockerfile
+  - name: workflow-service
+    dockerfile: backend/services/workflow-service/Dockerfile
+  - name: preview-service
+    dockerfile: backend/services/preview-service/Dockerfile
+  - name: transcription-service
+    dockerfile: backend/services/transcription-service/Dockerfile
+  - name: bridge-service
+    dockerfile: backend/services/bridge-service/Dockerfile

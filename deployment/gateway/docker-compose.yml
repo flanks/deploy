@@ -1,0 +1,56 @@
+networks:
+  eurion-net:
+    external: true
+    name: eurion-net
+
+volumes:
+  traefik_certs:
+
+services:
+  traefik:
+    image: traefik:v2.11
+    container_name: eurion-traefik
+    restart: always
+    command:
+      # API / Dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      # Entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Redirect all HTTP → HTTPS
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entryPoint.permanent=true"
+      # Docker provider
+      - "--providers.docker=true"
+      - "--providers.docker.network=eurion-net"
+      - "--providers.docker.exposedbydefault=false"
+      # File provider (for static routes like dashboard auth)
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      # Let's Encrypt
+      - "--certificatesresolvers.le.acme.email=admin@eurion.se"
+      - "--certificatesresolvers.le.acme.storage=/certs/acme.json"
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+      # Logging
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_certs:/certs
+      - ./dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - eurion-net
+    labels:
+      - "traefik.enable=true"
+      # Dashboard router — protected by basic auth middleware
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.eurion.se`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=le"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=dashboard-auth"
+      - "traefik.http.middlewares.dashboard-auth.basicauth.users=admin:$$2y$$12$$8vKXVqJ7JxWQ2J9JkH3z4OeR5YlPmNiF7gKt1u2vXzQ3sDwM0eALi"

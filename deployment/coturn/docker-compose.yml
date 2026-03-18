@@ -1,0 +1,26 @@
+﻿networks:
+  eurion-net:
+    external: true
+    name: eurion-net
+
+services:
+
+  # --- Coturn (TURN/STUN server for WebRTC) ---
+  # host networking: binds directly to all UDP relay ports without Docker NAT overhead
+  coturn:
+    image: coturn/coturn:4.6.2-alpine
+    container_name: eurion-coturn
+    restart: always
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - coturn_data:/var/lib/coturn
+    healthcheck:
+      test: ["CMD-SHELL", "nc -zuw1 127.0.0.1 3478 && echo ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  coturn_data:
