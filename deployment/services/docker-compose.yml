@@ -590,7 +590,7 @@ services:
         reservations:
           memory: 2g
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:11434/ || exit 1"]
+      test: ["CMD-SHELL", "ollama ls > /dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
