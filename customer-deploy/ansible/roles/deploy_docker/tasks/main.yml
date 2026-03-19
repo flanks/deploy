@@ -197,7 +197,7 @@
 # ── Phase 8: Coturn (optional, for video) ────────────────────────────────────
 - name: Deploy mail stack
   community.docker.docker_compose_v2:
-    project_src: {{ eurion_root }}/compose
+    project_src: "{{ eurion_root }}/compose"
     files:
       - mail.yml
     state: present
