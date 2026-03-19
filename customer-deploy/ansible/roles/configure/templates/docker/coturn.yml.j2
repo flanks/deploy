@@ -13,7 +13,7 @@ services:
       - {{ eurion_root }}/config/turnserver.conf:/etc/turnserver.conf:ro
     command: ["-c", "/etc/turnserver.conf"]
     healthcheck:
-      test: ["CMD-SHELL", "ss -tulnp | grep -q ':3478' || exit 1"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3478 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

@@ -12,29 +12,25 @@
         gateway: "172.20.0.1"
 
 # ── Phase 1: Pull Docker Images ─────────────────────────────────────────────
+- name: Build list of infrastructure images to pull
+  ansible.builtin.set_fact:
+    infra_images: >-
+      {{
+        ['postgres:16-alpine', 'redis:7-alpine', 'apache/kafka:3.7.0',
+         'minio/minio:latest', 'minio/mc:latest', 'traefik:v2.11',
+         'gotenberg/gotenberg:8', 'coturn/coturn:4.6.2-alpine']
+        + (['getmeili/meilisearch:v1.7'] if (feature_search | default(true) | bool) else [])
+        + (['prom/prometheus:v2.51.0', 'grafana/grafana:10.4.1', 'grafana/loki:2.9.5',
+            'prom/node-exporter:latest', 'gcr.io/cadvisor/cadvisor:latest']
+           if (feature_monitoring | default(true) | bool) else [])
+      }}
+
 - name: Pull infrastructure images
   community.docker.docker_image:
     name: "{{ item }}"
     source: pull
-  loop:
-    - "postgres:16-alpine"
-    - "redis:7-alpine"
-    - "bitnami/kafka:3.7"
-    - "minio/minio:latest"
-    - "minio/mc:latest"
-    - "traefik:v2.11"
-    - "gotenberg/gotenberg:8"
-    - "coturn/coturn:4.6.2-alpine"
-{% if feature_search | default(true) | bool %}
-    - "getmeili/meilisearch:v1.7"
-{% endif %}
-{% if feature_monitoring | default(true) | bool %}
-    - "prom/prometheus:v2.51.0"
-    - "grafana/grafana:10.4.1"
-    - "grafana/loki:2.9.5"
-    - "prom/node-exporter:latest"
-    - "gcr.io/cadvisor/cadvisor:latest"
-{% endif %}
+  loop: "{{ infra_images }}"
+  when: deploy_mode != 'airgapped'
 
 # ── Phase 1b: Load air-gapped images (if applicable) ────────────────────────
 - name: Load air-gapped image bundle
@@ -90,7 +86,7 @@
 
 - name: Wait for Kafka to be healthy
   ansible.builtin.command:
-    cmd: "docker exec eurion-kafka kafka-topics.sh --bootstrap-server localhost:9092 --list"
+    cmd: "docker exec eurion-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"
   register: kafka_ready
   retries: 30
   delay: 5
@@ -136,13 +132,13 @@
     pull: "{{ 'never' if deploy_mode == 'airgapped' else 'missing' }}"
 
 - name: Wait for Traefik to be healthy
-  ansible.builtin.uri:
-    url: "http://127.0.0.1:80"
-    status_code: [200, 301, 302, 404]
+  ansible.builtin.command:
+    cmd: docker exec eurion-traefik traefik healthcheck --ping
   register: traefik_health
   retries: 20
   delay: 5
-  until: traefik_health.status is defined
+  until: traefik_health.rc == 0
+  changed_when: false
 
 # ── Phase 5: Application Services ───────────────────────────────────────────
 - name: Deploy services stack
@@ -213,7 +209,7 @@
 # ── Phase 9: Run Migrations ─────────────────────────────────────────────────
 - name: Run database migrations for each service
   ansible.builtin.command:
-    cmd: "docker exec eurion-{{ item.name }} node dist/migrate.js"
+    cmd: "docker exec eurion-{{ item.name }} node backend/services/{{ item.name }}/dist/migrate.js"
   register: migration_result
   changed_when: "'Applied migration' in migration_result.stdout"
   failed_when: migration_result.rc != 0
@@ -222,6 +218,7 @@
     - item.name != 'gateway'
     - item.required | string | lower in ['true', 'yes']
     - item.db != 'postgres'
+    - item.name not in ['search-service']
 
 # ── Phase 10: Create Initial Admin User ──────────────────────────────────────
 - name: Check if initial admin exists

@@ -13,6 +13,7 @@ services:
     image: prom/prometheus:v2.51.0
     container_name: eurion-prometheus
     restart: unless-stopped
+    user: "65534:65534"
     networks:
       - eurion-net
     ports:
@@ -37,6 +38,7 @@ services:
     image: grafana/grafana:10.4.1
     container_name: eurion-grafana
     restart: unless-stopped
+    user: "472"
     networks:
       - eurion-net
     ports:
@@ -72,6 +74,7 @@ services:
     image: grafana/loki:2.9.5
     container_name: eurion-loki
     restart: unless-stopped
+    user: "10001:10001"
     networks:
       - eurion-net
     ports:

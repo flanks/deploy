@@ -139,7 +139,7 @@
 
 - name: Add deploy user to docker group
   ansible.builtin.user:
-    name: "{{ ansible_user }}"
+    name: "{{ ansible_user | default(lookup('env', 'USER') | default('claude', true)) }}"
     groups: docker
     append: true
   when: deploy_mode in ['docker', 'airgapped']
@@ -343,6 +343,18 @@
     - "{{ eurion_backups }}"
     - "{{ eurion_backups }}/postgres"
     - "{{ eurion_backups }}/config"
+
+- name: Set correct ownership on monitoring data directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ item.uid }}"
+    group: "{{ item.uid }}"
+    state: directory
+    recurse: true
+  loop:
+    - { path: "{{ eurion_data }}/grafana",    uid: "472"   }
+    - { path: "{{ eurion_data }}/prometheus", uid: "65534" }
+    - { path: "{{ eurion_data }}/loki",       uid: "10001" }
 
 # ── NTP / Time Sync ─────────────────────────────────────────────────────────
 - name: Ensure chrony/systemd-timesyncd is running
