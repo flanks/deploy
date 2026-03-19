@@ -1,0 +1,34 @@
+services:
+  stalwart:
+    image: stalwartlabs/mail-server:latest
+    container_name: eurion-stalwart
+    restart: unless-stopped
+    volumes:
+      - {{ eurion_data }}/stalwart:/opt/stalwart-mail
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "143:143"
+      - "993:993"
+      - "4190:4190"
+    networks:
+      - eurion-net
+    environment:
+      - TZ=UTC
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 25 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.webmail.rule: "Host(`mail.{{ domain }}`)"
+      traefik.http.routers.webmail.entrypoints: "websecure"
+      traefik.http.routers.webmail.tls: "true"
+      traefik.http.services.webmail.loadbalancer.server.port: "8080"
+
+networks:
+  eurion-net:
+    external: true

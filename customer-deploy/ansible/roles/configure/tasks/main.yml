@@ -136,6 +136,13 @@
         mode: '0640'
       when: feature_video | default(true) | bool
 
+    - name: Template mail compose
+      ansible.builtin.template:
+        src: docker/mail.yml.j2
+        dest: "{{ eurion_root }}/compose/mail.yml"
+        mode: '0644'
+      when: feature_mail | default(false) | bool
+
     - name: Template .env file
       ansible.builtin.template:
         src: docker/env.j2

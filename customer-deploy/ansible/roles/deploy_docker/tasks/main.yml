@@ -195,6 +195,15 @@
   when: feature_monitoring | default(true) | bool
 
 # ── Phase 8: Coturn (optional, for video) ────────────────────────────────────
+- name: Deploy mail stack
+  community.docker.docker_compose_v2:
+    project_src: {{ eurion_root }}/compose
+    files:
+      - mail.yml
+    state: present
+    remove_orphans: false
+  when: feature_mail | default(false) | bool
+
 - name: Deploy coturn stack
   community.docker.docker_compose_v2:
     project_src: "{{ eurion_root }}/compose"
